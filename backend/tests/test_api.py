@@ -43,11 +43,6 @@ def test_unsolvable_422(client):
     assert "no solution" in r.text
 
 
-def test_bad_hints_422(client):
-    r = client.post("/api/solve", json={"puzzle": get_puzzle(4).tolist(), "hints": [81]})
-    assert r.status_code == 422
-
-
 def test_duplicate_422(client):
     p = get_puzzle(4).copy()
     p[0, 0] = 1  # 1 already at (0, 1)

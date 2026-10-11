@@ -95,46 +95,16 @@ def test_error_event():
     assert events[-1]["type"] == "error"
 
 
-def test_hints_added_and_carried_over():
-    puzzle = get_puzzle(6)
-    events = list(run_simulation(puzzle, seed=11, max_sim_ms=4000, patience=1, hint_after_ms=0))
-    hinted = [c for e in events if e["type"] == "step" and e["kick"] and e["kick"]["kind"] == "hint" for c in e["kick"]["cells"]]
-    assert hinted, "expected at least one hint restart"
-    assert all(puzzle.reshape(81)[c] == 0 for c in hinted)
-    done = events[-1]
-    assert done["hints"] == hinted
-    follow_up = list(run_simulation(puzzle, seed=12, max_sim_ms=100, hints=done["hints"]))
-    meta = follow_up[0]
-    assert meta["hints"] == done["hints"]
-    assert meta["connections"]["stimulus_active"] == (meta["givens"] + len(hinted)) * 5
-
-
-def test_kicks_leave_fixed_cells_alone():
+def test_kicks_leave_given_cells_alone():
     from snn.control import kick_targets
 
     sol = solve_all(get_puzzle(4), 1)[0]
     grid = sol.copy()
     grid[0, 0], grid[0, 3] = grid[0, 3], grid[0, 0]  # swap: breaks columns 1 and 4 and two boxes
-    fixed = np.zeros((9, 9), dtype=int)
-    fixed[0, 0] = sol[0, 0]  # a hinted cell now showing a wrong digit
-    fixed[1, 0] = sol[1, 0]  # a hinted cell showing its own digit, inside the conflict's column
-    targets = dict(kick_targets(fixed, grid, wide=True))
-    assert targets[0] == grid[0, 0]  # the wrong digit on the fixed cell is silenced
-    assert 9 not in targets  # the correct fixed cell is never silenced
+    givens = np.zeros((9, 9), dtype=int)
+    givens[0, 0] = sol[0, 0]  # a given cell now showing a wrong digit
+    givens[1, 0] = sol[1, 0]  # a given cell showing its own digit, inside the conflict's column
+    targets = dict(kick_targets(givens, grid, wide=True))
+    assert targets[0] == grid[0, 0]  # the wrong digit on the given cell is silenced
+    assert 9 not in targets  # a correct given cell is never silenced
     assert 3 in targets  # the free cell in the conflict is
-
-
-def test_choose_hints_prefers_conflicts():
-    from snn.control import choose_hints
-
-    puzzle = get_puzzle(4)
-    sol = solve_all(puzzle, 1)[0]
-    grid = sol.copy()
-    flat = grid.reshape(81)
-    free = [c for c in range(81) if puzzle.reshape(81)[c] == 0]
-    wrong = free[0]
-    flat[wrong] = flat[wrong] % 9 + 1  # one free cell shows a wrong (conflicting) digit
-    hints = choose_hints(puzzle, grid, sol.reshape(81), set(), 4, np.random.default_rng(0))
-    assert len(hints) == 4 and all(puzzle.reshape(81)[c] == 0 for c in hints)
-    assert wrong in hints
-    assert choose_hints(puzzle, grid, sol.reshape(81), set(free), 4, np.random.default_rng(0)) == []

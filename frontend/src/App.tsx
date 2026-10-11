@@ -110,24 +110,20 @@ export default function App() {
 
     let offset = 0;
     let segment = 0;
-    let hints: number[] = [];
     let drops = 0;
     try {
       for (;;) {
-        const last: { done: DoneEvent | null; tEnd: number; hints: number[] } = { done: null, tEnd: offset, hints };
+        const last: { done: DoneEvent | null; tEnd: number } = { done: null, tEnd: offset };
         try {
           await solve(
             toRows(puzzle),
             (ev) => {
-              if (ev.type === "step") {
-                last.tEnd = ev.t_end_ms;
-                if (ev.kick?.kind === "hint") last.hints = [...last.hints, ...ev.kick.cells];
-              }
+              if (ev.type === "step") last.tEnd = ev.t_end_ms;
               if (ev.type === "done") last.done = ev;
               onEvent(ev);
             },
             ctrl.signal,
-            { t_offset_ms: offset, segment, hints },
+            { t_offset_ms: offset, segment },
             () => setRun((r) => (r ? { ...r, busy: true } : r)),
           );
         } catch (e) {
@@ -141,7 +137,6 @@ export default function App() {
           await sleep(2000 * drops);
         }
         offset = last.tEnd;
-        hints = last.done?.hints ?? last.hints;
         segment += 1;
       }
     } catch (e) {

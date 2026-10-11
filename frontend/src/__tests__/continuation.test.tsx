@@ -36,21 +36,20 @@ const meta = (segment: number, t_offset_ms: number): MetaEvent => ({
   noise_rate: 350, stim_rate: 200, pop_size: 5, n_populations: 729, n_neurons: 3645,
   neuron_model: "iaf_psc_exp", neuron: { V_th: -50, V_reset: -70, E_L: -65, tau_m: 20, t_ref: 2 },
   connections: { inhibitory: 510300, noise: 3645, stimulus: 3645, stimulus_active: 180, recorder: 3645, total: 521235 },
-  givens: 36, build_seconds: 1, wall_budget_s: 240, kick_ms: 50, patience: 5, hints: [], hint_after_ms: 15000,
+  givens: 36, build_seconds: 1, wall_budget_s: 240, kick_ms: 50, patience: 5,
 });
 
 const step = (t: number, grid: number[], solved: boolean): StepEvent => ({
   type: "step", k: 0, t_start_ms: t, t_end_ms: t + 100, grid,
   valid_rows: Array(9).fill(solved), valid_cols: Array(9).fill(solved), valid_boxes: Array(9).fill(solved),
   givens_overridden: 0, performance: solved ? 1 : 0.5, violations: solved ? 0 : 3, cells_changed: 4,
-  total_spikes: 11500, rate_all_hz: 31.5, rate_winners_hz: 240, rate_losers_hz: 5, kick: solved ? null : { kind: "hint", cells: [5, 6] },
+  total_spikes: 11500, rate_all_hz: 31.5, rate_winners_hz: 240, rate_losers_hz: 5, kick: solved ? null : { kind: "reset", cells: [] },
   wall_seconds: 0.5,
 });
 
 const done = (solved: boolean, t_end_ms: number, grid: number[]): DoneEvent => ({
   type: "done", solved, resume: !solved, solved_at_ms: solved ? t_end_ms - 100 : null, t_end_ms, final_grid: grid,
   wall_seconds: 10, cells: { counts: Array.from({ length: 81 }, () => [9, 1, 0, 0, 0, 0, 0, 0, 0]), margin: Array(81).fill(0.9), margin_mean: 0.9 },
-  hints: [5, 6],
   network: {
     neurons_per_pop: 5,
     spikes: { neuron_b64: btoa(String.fromCharCode(0, 0, 50, 0)), t_b64: btoa(String.fromCharCode(10, 0, 20, 0)) },
@@ -60,7 +59,7 @@ const done = (solved: boolean, t_end_ms: number, grid: number[]): DoneEvent => (
 });
 
 describe("continuation across requests", () => {
-  it("continues with a new request, carrying hints, until the puzzle is solved", async () => {
+  it("continues with a new request until the puzzle is solved", async () => {
     const calls: unknown[] = [];
     vi.mocked(solve).mockImplementation(async (_puzzle, onEvent: (ev: SolveEvent) => void, _signal, cont) => {
       calls.push(cont);
@@ -80,11 +79,10 @@ describe("continuation across requests", () => {
     act(() => fireEvent.click(screen.getByRole("button", { name: "Randomly Initialize" })));
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Start Solving" })));
 
-    expect(calls).toEqual([{ t_offset_ms: 0, segment: 0, hints: [] }, { t_offset_ms: 100, segment: 1, hints: [5, 6] }]);
+    expect(calls).toEqual([{ t_offset_ms: 0, segment: 0 }, { t_offset_ms: 100, segment: 1 }]);
     expect(await screen.findByText("solved at 100 ms")).toBeTruthy();
     expect(await screen.findByText("Inside the spiking network", {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByText("220 Hz")).toBeTruthy(); // winning neurons tile
-    expect(screen.queryByText(/hint/i)).toBeNull(); // nothing about hints is shown
 
     // editing after the run keeps the solved board and changes only that cell
     const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];

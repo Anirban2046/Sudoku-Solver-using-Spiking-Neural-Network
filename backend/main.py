@@ -45,14 +45,7 @@ def settings():
         # Wall-clock seconds one request may simulate before handing over to a
         # follow-up request; keep it well below the function timeout (300 s).
         "wall_budget_s": _env_float("WALL_BUDGET_S", 240.0, 10.0, 280.0),
-        # Simulated time after which restarts start adding hints (negative: never).
-        "hint_after_ms": _hint_after(),
     }
-
-
-def _hint_after():
-    value = _env_float("HINT_AFTER_MS", 15000.0, -1.0, 1e9)
-    return None if value < 0 else int(value)
 
 
 def _duplicates(puzzle):
@@ -80,15 +73,6 @@ class SolveRequest(BaseModel):
     # Continuation of an earlier request that ran out of its wall-clock budget.
     t_offset_ms: int = Field(default=0, ge=0, le=10**9)
     segment: int = Field(default=0, ge=0, le=10**6)
-    # Cells (0..80) hinted by earlier requests of the same run.
-    hints: list[int] = Field(default_factory=list, max_length=81)
-
-    @field_validator("hints")
-    @classmethod
-    def check_hints(cls, hints):
-        if any(not 0 <= c <= 80 for c in hints):
-            raise ValueError("hints must be cell indices from 0 to 80")
-        return sorted(set(hints))
 
     @field_validator("puzzle")
     @classmethod
@@ -159,7 +143,7 @@ def _ndjson(req, cfg, release):
     try:
         from snn.engine import run_simulation
 
-        options = dict(cfg, seed=req.seed, t_offset_ms=req.t_offset_ms, segment=req.segment, hints=req.hints)
+        options = dict(cfg, seed=req.seed, t_offset_ms=req.t_offset_ms, segment=req.segment)
         for event in run_simulation(req.puzzle, **options):
             yield json.dumps(event, separators=(",", ":")) + "\n"
     finally:

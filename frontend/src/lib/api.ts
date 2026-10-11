@@ -43,7 +43,7 @@ export async function solve(
   puzzle: number[][],
   onEvent: (ev: SolveEvent) => void,
   signal?: AbortSignal,
-  continuation: { t_offset_ms?: number; segment?: number; seed?: number; hints?: number[] } = {},
+  continuation: { t_offset_ms?: number; segment?: number; seed?: number } = {},
   onBusy?: () => void,
 ): Promise<void> {
   const body = JSON.stringify({ puzzle, ...continuation });

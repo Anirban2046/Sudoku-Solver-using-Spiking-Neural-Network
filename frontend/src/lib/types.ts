@@ -32,17 +32,12 @@ export interface MetaEvent {
   kick_ms: number;
   /** windows without progress before the network is kicked */
   patience: number;
-  /** cells hinted by earlier requests of this run */
-  hints: number[];
-  /** simulated time after which restarts add hints (null: never) */
-  hint_after_ms: number | null;
 }
 
 export interface Kick {
   /** "kick": winners of the listed cells were briefly silenced;
-   *  "reset": all membrane potentials were re-randomised;
-   *  "hint": a reset that also stimulated the listed cells with their correct digit. */
-  kind: "kick" | "reset" | "hint";
+   *  "reset": all membrane potentials were re-randomised. */
+  kind: "kick" | "reset";
   cells: number[];
 }
 
@@ -78,8 +73,6 @@ export interface DoneEvent {
   wall_seconds: number;
   cells: { counts: number[][]; margin: number[]; margin_mean: number };
   network: NetworkView;
-  /** all hinted cells so far; passed on to a continuation request */
-  hints: number[];
 }
 
 /** The spiking network in its final window (see backend analysis.network_view). */

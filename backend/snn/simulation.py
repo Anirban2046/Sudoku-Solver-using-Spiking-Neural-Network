@@ -22,12 +22,6 @@ So when progress stalls, a controller perturbs the network:
 * **reset** - if several kicks in a row bring no improvement, all membrane
   potentials are re-randomised (``SudokuNet.reset_V_m``), which restarts the
   search from a fresh state while keeping the givens' stimulation.
-* **hint** - from ``hint_after_ms`` of simulated time on, every reset also
-  stimulates ``hint_batch`` more cells with their correct digit (from the
-  classical solver), exactly as if they were givens, preferring the cells the
-  network is struggling with. The network still has to solve every other cell.
-  Hints only ever grow, so even the hardest puzzle is eventually solved; puzzles
-  that the network solves on its own never receive any.
 
 A request stops at the first valid grid or when its wall-clock budget is used
 up. In the latter case ``done.resume`` is true and the client starts a new
@@ -44,13 +38,12 @@ import numpy as np
 
 from . import sudoku_net
 from .analysis import cell_summary, count_violations, network_view
-from .control import choose_hints, kick_targets
-from .helpers import solve_all, validate_solution
+from .control import kick_targets
+from .helpers import validate_solution
 from .sudoku_net import SudokuNet
 
 KICK_I_E = -5.0  # bias current (nA scale, as neuron_params) that silences a population
 RESETS_AFTER_FUTILE_KICKS = 4
-HINT_SOLVER_NODES = 500_000  # search budget of the classical solver used for hints
 VM_INTERVAL_MS = 1.0  # membrane-potential sampling of one neuron per population
 RATE_WINDOW_MS = 1000  # span of the final firing-rate statistics
 
@@ -134,9 +127,6 @@ def run(
     max_sim_ms=None,
     patience=5,
     kick_ms=50,
-    hints=(),
-    hint_after_ms=15000,
-    hint_batch=4,
 ):
     t_run = time.time()
     puzzle = np.asarray(puzzle, dtype=np.int64).reshape(9, 9)
@@ -154,29 +144,6 @@ def run(
     net = SudokuNet(pop_size=pop_size, input=puzzle, noise_rate=noise_rate)
     build_seconds = time.time() - t_build
 
-    hinted = []
-    fixed = puzzle.copy().reshape(81)  # givens plus hinted cells, which kicks leave alone
-    cache = {}
-
-    def solution():
-        """Classical solution (None if not found quickly), computed when the
-        first hint is needed."""
-        if "s" not in cache:
-            sols = solve_all(puzzle, 1, max_nodes=HINT_SOLVER_NODES)
-            cache["s"] = sols[0].reshape(81) if sols else None
-        return cache["s"]
-
-    def add_hints(cells):
-        sol = solution()
-        if sol is None:
-            return
-        for c in cells:
-            pop = net.io_indices[c // 9, c % 9, sol[c] - 1]
-            nest.GetConnections(net.stim[pop]).set({"weight": sudoku_net.weight_stim})
-            hinted.append(int(c))
-            fixed[c] = sol[c]
-
-    add_hints([c for c in hints if puzzle.reshape(81)[c] == 0])
     connections = _connections(net)
 
     # Record V_m of the first neuron of every population (created after counting
@@ -206,8 +173,6 @@ def run(
         "wall_budget_s": float(wall_budget_s),
         "kick_ms": kick_ms,
         "patience": patience,
-        "hints": list(hinted),
-        "hint_after_ms": hint_after_ms,
     }
 
     win_s = chunk_ms / 1000.0
@@ -254,15 +219,13 @@ def run(
         performance = 1.0 if valid else float((boxes.sum() + rows.sum() + cols.sum()) / 27)
         violations = count_violations(grid)
         overridden = int(((puzzle != 0) & (puzzle != grid)).sum())
-        # hinted cells showing a wrong digit count as stalled progress too
-        off_hint = int(sum(grid.reshape(81)[c] != fixed[c] for c in hinted))
         winners = np.zeros(729, dtype=bool)
         winners[np.arange(81) * 9 + grid.reshape(81) - 1] = True
         n_win = 81 * pop_size
 
         # Stall detection and perturbation.
         kick = None
-        bad = violations + overridden + off_hint
+        bad = violations + overridden
         if not valid:
             best_overall = bad if best_overall is None else min(best_overall, bad)
             if best_bad is None or bad < best_bad:
@@ -273,15 +236,10 @@ def run(
                 if futile_kicks >= RESETS_AFTER_FUTILE_KICKS:
                     net.reset_V_m()
                     kick = {"kind": "reset", "cells": []}
-                    if hint_after_ms is not None and t_end >= hint_after_ms and solution() is not None:
-                        new = choose_hints(puzzle, grid, solution(), set(hinted), hint_batch, rng)
-                        if new:
-                            add_hints(new)
-                            kick = {"kind": "hint", "cells": new}
                     futile_kicks = 0
                 else:
                     # escalate: a kick that didn't help is followed by a wider one
-                    pending_kick = kick_targets(fixed.reshape(9, 9), grid, wide=futile_kicks > 0)
+                    pending_kick = kick_targets(puzzle, grid, wide=futile_kicks > 0)
                     kick = {"kind": "kick", "cells": sorted({c for c, _ in pending_kick})}
                     futile_kicks = futile_kicks + 1 if bad >= best_overall else 0
                 best_bad, stuck = None, 0
@@ -336,5 +294,4 @@ def run(
             vm=_vm_matrix(multimeter, first_gid, pop_size, t_start, chunk_ms),
             recent_neuron_counts=list(recent_neuron_counts),
         ),
-        "hints": list(hinted),
     }

@@ -91,7 +91,7 @@ evolved.
 
 | Feature | Description |
 |---|---|
-| Always finishes | A convergence controller (§3.6) intervenes when the network stalls, so every valid puzzle is eventually solved |
+| Keeps searching | A convergence controller (§3.6) intervenes when the network stalls, and the run continues until the puzzle is solved |
 | No overall time limit | Long runs are split into consecutive requests that each stay within the hosting time limit (§3.7) |
 | Fault tolerance | Dropped connections, server errors and busy servers are retried automatically, and the run resumes from the last window |
 | Input safety | The server re-validates every puzzle and rejects any it cannot confirm to be solvable |
@@ -195,26 +195,24 @@ The network is stochastic. It can stall with a few conflicts for a long time,
 or settle on a valid grid that overrides a given digit (valid grids are
 stable attractors). The original example simply stops after a fixed time.
 This project adds a controller around the unchanged network that escalates
-in three steps:
+in two steps:
 
 | Step | Trigger | Action |
 |---|---|---|
 | **Kick** | No improvement in conflicts for 5 windows (0.5 s) | The winning populations of the conflicting cells are silenced for 50 ms with a strong negative bias current, letting a rival digit take over. If a kick does not help, the next one silences every free cell sharing a row, column or box with a conflict |
 | **Restart** | 4 kicks in a row without improvement | All membrane potentials are re-randomised, restarting the search while keeping the givens' input |
-| **Hint** | Restarts after 15 s of simulated time | Each restart also stimulates 4 more empty cells with their correct digit (from a classical solver), exactly like givens. Cells in conflict are chosen first |
 
-Hints only ever increase, so the network is guaranteed to reach a solution;
-it still has to solve every cell that is not hinted. Most puzzles are solved
-before any hint is used. Setting `HINT_AFTER_MS=-1` disables hints for a
-pure-network run.
+Both steps only perturb the network's activity; every digit is still decided
+by the spiking dynamics. Together with continuation requests (§3.7), the
+network keeps searching until it reaches a valid solution.
 
 ### 3.7 Running within serverless time limits
 
 A serverless function may run for at most 300 s. Each request therefore stops
 after a wall-clock budget of 240 s and reports `resume: true`. The browser
 then sends a follow-up request that rebuilds the network with a new random
-seed and continues the same timeline, carrying over any hints. To the user,
-this looks like one continuous run.
+seed and continues the same timeline. To the user, this looks like one
+continuous run.
 
 ### 3.8 Changes to the upstream code
 
@@ -247,7 +245,7 @@ flowchart LR
 | **API** (`backend/main.py`) | Request validation, a per-instance lock (one simulation at a time), NDJSON streaming |
 | **Engine** (`backend/snn/engine.py`) | Runs every NEST call on one long-lived thread and passes events to the request through a queue. NEST crashes if it is imported on one thread and driven from another |
 | **Simulation** (`backend/snn/simulation.py`) | Builds the network, runs the 100 ms windows, reads out the board, applies the convergence controller, records spikes and membrane potentials |
-| **Controller logic** (`backend/snn/control.py`) | Chooses kick targets and hint cells (no NEST dependency) |
+| **Controller logic** (`backend/snn/control.py`) | Chooses which populations a kick silences (no NEST dependency) |
 | **Analysis** (`backend/snn/analysis.py`) | Conflict counting, per-cell decision margins, final network view (spikes, membrane potentials, firing-rate statistics) |
 
 **Request flow**
@@ -304,7 +302,6 @@ While a simulation is running, it returns `{"nest": "3.10.0", "cpus": 2, "busy":
 | `seed` | `int` | no | Random seed for NEST and the readout (reproducible runs) |
 | `t_offset_ms` | `int` | no | Continuation: simulated time already elapsed |
 | `segment` | `int` | no | Continuation: index of this request within the run |
-| `hints` | `int[]` | no | Continuation: cells hinted by earlier requests |
 
 **Response:** `application/x-ndjson`, one JSON object per line.
 
@@ -334,7 +331,7 @@ stochastic, so individual runs vary.
 
 | Quantity | Observed value |
 |---|---|
-| Random 36-given puzzles | Usually solved within 0.4–10 s of simulated time, mostly without hints |
+| Random 36-given puzzles | Usually solved within 0.4–10 s of simulated time |
 | Simulation speed on Vercel | About 0.6 s of wall time per 100 ms window |
 | Spikes per 100 ms window | About 11,700 |
 | Mean firing rate (all neurons) | About 32 Hz |
@@ -350,12 +347,12 @@ Ten puzzles (six random 36-given puzzles and NEST example puzzles 1, 2, 5 and
 |---|---|
 | Original network, no controller | 4 / 10 |
 | With kicks and restarts | 6–7 / 10 |
-| Full controller with hints, across continuation requests | Always solved; termination is guaranteed by the hints |
 
 The two hardest puzzles (NEST example 5, and example 6, the so-called "world's
-hardest Sudoku") stayed unsolved after more than 60 s of simulated time
-without hints. With the full controller they were solved at 21.7 s (4 of 58
-empty cells hinted) and 32.1 s (12 of 60 empty cells hinted).
+hardest Sudoku") remain the difficult cases: with the controller they were
+still unsolved after about 67 s of simulated time (three consecutive
+requests). Because runs continue across requests, such puzzles keep being
+searched, but they can take many minutes.
 
 ---
 
@@ -382,7 +379,7 @@ empty cells hinted) and 32.1 s (12 of 60 empty cells hinted).
 │   ├── snn/
 │   │   ├── sudoku_net.py    NEST network definition (from the NEST example)
 │   │   ├── simulation.py    Network build, 100 ms run loop, convergence controller
-│   │   ├── control.py       Kick-target and hint selection
+│   │   ├── control.py       Kick-target selection
 │   │   ├── engine.py        Dedicated NEST thread and event queue
 │   │   ├── analysis.py      Conflicts, decision margins, final network view
 │   │   ├── helpers.py       Validation, classical solver, puzzle generator
@@ -447,7 +444,6 @@ All settings are optional environment variables of the backend.
 | Variable | Default | Description |
 |---|---|---|
 | `WALL_BUDGET_S` | `240` | Wall-clock seconds one request may simulate before the browser continues with a new request (10–280) |
-| `HINT_AFTER_MS` | `15000` | Simulated time after which restarts may add hints; `-1` disables hints |
 | `NOISE_RATE` | `350` | Background Poisson rate in Hz |
 | `CORS_ORIGINS` | – | Comma-separated origins allowed to call a separately hosted backend |
 
@@ -491,7 +487,7 @@ with `CORS_ORIGINS`.
 ## 13. Testing and quality
 
 ```bash
-cd backend  && python -m pytest -q   # 34 tests
+cd backend  && python -m pytest -q   # 31 tests
 cd frontend && npm test              # 23 tests
 ```
 
@@ -499,7 +495,7 @@ cd frontend && npm test              # 23 tests
 |---|---|
 | Sudoku logic | Conflict detection, solution counting, unique-puzzle generation, Start-button rules |
 | Network | Connection counts (521,235), event order, payload sizes, recorded spikes and membrane potentials, solution validity |
-| Controller | Kick and restart triggering, hint selection and carry-over, protection of given and hinted cells |
+| Controller | Kick and restart triggering, protection of given cells |
 | API | Validation errors, busy handling, streaming, health check while busy |
 | Frontend behaviour | Grid editing and clearing, continuation across requests, retries after errors, busy waiting |
 
@@ -511,10 +507,8 @@ push.
 ## 14. Limitations
 
 * **Stochastic run time.** Easy puzzles usually finish within seconds of
-  simulated time; hard ones can take minutes of wall time and may use hints.
-* **Hints use a classical solver.** On very hard puzzles, some cells are
-  given their correct digit as extra input after 15 s. The network solves
-  the remaining cells. Hints can be disabled (§11).
+  simulated time. There is no upper bound: the hardest puzzles can take many
+  minutes of wall time.
 * **One simulation per instance.** NEST keeps a single global kernel, so each
   server instance runs one simulation at a time. Concurrent visitors may wait
   briefly.

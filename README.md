@@ -126,7 +126,8 @@ Vercel Hobby includes 4 active-CPU hours a month. A typical solve takes
 
 If NEST can't run as a Vercel function, deploy `backend/` with its
 `Dockerfile` to another host and point the frontend at it with
-`VITE_API_BASE`. The build guide's Appendix 2 lists the options.
+`VITE_API_BASE`, e.g. a Vercel container service, Google Cloud Run or a
+Hugging Face Docker Space.
 
 ## API
 
@@ -160,17 +161,12 @@ backend/   FastAPI app (main.py) and the snn package:
            analysis.py (network statistics), encoding.py,
            helpers.py (validation, classical solver)
 frontend/  Vite + React + TypeScript: grid, controls, live panel, results
-docs/      original build guide, reference copy of sudoku_net.py, screenshot
+docs/      reference copy of sudoku_net.py, screenshot
 ```
 
 **All NEST calls run on one dedicated thread.** NEST segfaults if it is
 imported on one Python thread and driven from another, which a thread-pooled
 web server would otherwise do.
-
-`docs/BUILD_GUIDE.md` is the original specification. Since it was written,
-this app has replaced the fixed time limit with the kick/restart/hint
-controller and continuation requests, removed the spike raster, and reduced the report to the
-views described above.
 
 ## Credits and licence
 

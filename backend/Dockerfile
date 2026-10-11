@@ -1,4 +1,4 @@
-# Fallback host for the backend only (see docs/BUILD_GUIDE.md, Appendix 2).
+# Fallback host for the backend only (e.g. Google Cloud Run or a Hugging Face Docker Space).
 FROM python:3.12-slim
 RUN useradd -m -u 1000 user
 USER user

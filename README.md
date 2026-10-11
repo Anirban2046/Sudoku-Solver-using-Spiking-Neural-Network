@@ -180,11 +180,14 @@ The simulation runs in windows of 100 ms. After each window the spikes of
 every population are counted, and each cell is read out as the digit whose
 population fired most (ties broken at random):
 
-$$\hat d_{r,c} = \arg\max_{d}\ \#\text{spikes}_{r,c,d}$$
+$$\hat{d}_{r,c} = \arg\max_{d} N_{r,c,d}$$
 
-The board is scored as
+where $N_{r,c,d}$ is the number of spikes fired in the window by the population
+for digit $d$ in row $r$, column $c$. The board is scored as
 
-$$\text{performance} = \frac{\#\text{valid rows} + \#\text{valid columns} + \#\text{valid boxes}}{27}$$
+$$\text{performance} = \frac{R + C + B}{27}$$
+
+where $R$, $C$ and $B$ are the numbers of valid rows, columns and boxes.
 
 A puzzle is **solved** when all 27 units are valid and every given digit is
 kept.
@@ -225,18 +228,38 @@ continuous run.
 
 ## 4. System architecture
 
-```mermaid
-flowchart LR
-    U[Browser<br/>React single-page app] -- "POST /api/solve<br/>(puzzle)" --> A
-    A -- "NDJSON stream:<br/>meta, step × N, done" --> U
-    subgraph Vercel
-        W[Static frontend<br/>Vite build]
-        A[FastAPI service<br/>main.py]
-        A --> E[Engine<br/>dedicated NEST thread]
-        E --> S[Simulation loop<br/>+ convergence controller]
-        S --> N[(NEST kernel<br/>3,645 neurons)]
-    end
-    U -. "GET /" .-> W
+```text
+                 ┌──────────────────────────────┐
+                 │ Browser                      │
+                 │ React single-page app        │
+                 └───┬───────────────┬────▲─────┘
+              GET /  │  POST         │    │  NDJSON stream:
+                     │  /api/solve   │    │  meta, a step every
+                     │               │    │  100 ms, done
+┌────────────────────┼───────────────┼────┼────────────────────┐
+│ Vercel             │               │    │                    │
+│                    ▼               ▼    │                    │
+│  ┌───────────────────────┐   ┌──────────┴───────────────┐    │
+│  │ Static frontend       │   │ FastAPI service          │    │
+│  │ Vite build            │   │ main.py                  │    │
+│  └───────────────────────┘   └─────────────┬────────────┘    │
+│                                            ▼                 │
+│                              ┌──────────────────────────┐    │
+│                              │ Engine (engine.py)       │    │
+│                              │ dedicated NEST thread    │    │
+│                              └─────────────┬────────────┘    │
+│                                            ▼                 │
+│                              ┌──────────────────────────┐    │
+│                              │ Simulation loop          │    │
+│                              │ (simulation.py):         │    │
+│                              │ readout and controller   │    │
+│                              └─────────────┬────────────┘    │
+│                                            ▼                 │
+│                              ┌──────────────────────────┐    │
+│                              │ NEST kernel              │    │
+│                              │ 3,645 neurons            │    │
+│                              └──────────────────────────┘    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 | Component | Responsibility |

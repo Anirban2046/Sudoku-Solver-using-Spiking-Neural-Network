@@ -7,3 +7,4 @@ __pycache__/
 .vercel
 .env*.local
 *.log
+resources/

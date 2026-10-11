@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import AnalysisReport from "./components/AnalysisReport";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Controls from "./components/Controls";
 import LivePanel, { type RunStatus } from "./components/LivePanel";
 import SudokuGrid, { type LiveBoard } from "./components/SudokuGrid";
@@ -16,6 +15,9 @@ interface Run {
   raster: RasterWindow[];
   done: DoneEvent | null;
 }
+
+// The report pulls in KaTeX; load it only once a run has finished.
+const AnalysisReport = lazy(() => import("./components/AnalysisReport"));
 
 const toRows = (g: Grid) => Array.from({ length: 9 }, (_, r) => g.slice(r * 9, r * 9 + 9));
 
@@ -156,7 +158,9 @@ export default function App() {
         />
       )}
       {run?.done && run.meta && run.done.analysis.outcome && (
-        <AnalysisReport analysis={run.done.analysis} meta={run.meta} raster={run.raster} />
+        <Suspense fallback={<p className="note">Loading the analysis…</p>}>
+          <AnalysisReport analysis={run.done.analysis} meta={run.meta} raster={run.raster} />
+        </Suspense>
       )}
     </main>
   );

@@ -412,7 +412,7 @@ function ReadoutSection({ readout, firing }: { readout: Analysis["readout"]; fir
               onClick={() => setCell(i)}
               aria-label={`${cellName(i)}, digit ${d}`}
               aria-pressed={i === cell}
-              style={{ opacity: 0.35 + 0.65 * firing.decision_margin[i] }}
+              style={i === cell ? undefined : { background: `rgba(217, 130, 43, ${(0.55 * (1 - firing.decision_margin[i])).toFixed(3)})` }}
             >
               {d}
             </button>
@@ -425,7 +425,7 @@ function ReadoutSection({ readout, firing }: { readout: Analysis["readout"]; fir
           <ChartCanvas config={config} height={240} label={`Digit spike counts for ${cellName(cell)}`} />
         </div>
       </div>
-      <p className="note">Cell shading in the picker shows the decision margin (paler = less decided).</p>
+      <p className="note">Orange shading in the picker marks cells with a small decision margin (more orange = less decided).</p>
     </Section>
   );
 }
@@ -471,6 +471,8 @@ function ConvergenceSection({ readout, convergence }: { readout: Analysis["reado
     [tr],
   );
   const maxLock = Math.max(...convergence.lock_in_ms);
+  // Kept at or below 0.5 so the ink-coloured text stays at >= 4.5:1 contrast.
+  const alpha = (ms: number) => (maxLock ? 0.04 + (0.46 * ms) / maxLock : 0.04);
   const first = convergence.lock_in_order.slice(0, 5).map(cellName).join(", ");
   const lastCells = convergence.lock_in_order.slice(-5).map(cellName).join(", ");
   return (
@@ -491,7 +493,7 @@ function ConvergenceSection({ readout, convergence }: { readout: Analysis["reado
           <div
             key={i}
             className={`mb-cell${convergence.is_given[i] ? " given" : ""}`}
-            style={{ background: `rgba(47, 109, 181, ${maxLock ? 0.08 + (0.85 * ms) / maxLock : 0.1})` }}
+            style={{ background: `rgba(31, 79, 138, ${alpha(ms)})` }}
             title={`${cellName(i)}: locked in at ${ms} ms, changed ${convergence.changes_per_cell[i]} times`}
           >
             <span className="mb-sub">{fmt(ms)}</span>

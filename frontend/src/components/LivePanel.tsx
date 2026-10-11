@@ -85,9 +85,9 @@ export default function LivePanel({ meta, steps, raster, status, solved, viewInd
 
       {meta && (
         <>
-          <h3 className="panel-title">
+          <h2 className="panel-title">
             Spike raster: last {fmt(2000)} ms, {meta.raster_neurons_per_pop} neuron(s) per population, {fmt(meta.n_populations)} populations
-          </h3>
+          </h2>
           <SpikeRaster
             windows={raster}
             endMs={Math.max(timeMs, 2000)}

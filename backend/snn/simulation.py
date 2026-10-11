@@ -104,7 +104,8 @@ def run(puzzle, noise_rate, max_sim_ms, chunk_ms, seed, raster_per_pop, pop_size
     puzzle = np.asarray(puzzle, dtype=np.int64).reshape(9, 9)
     if seed is None:
         seed = int(np.random.default_rng().integers(1, 2**31 - 1))
-    threads = os.cpu_count() or 1
+    # CPUs this process may actually use (cpu_count() reports the host's in containers).
+    threads = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
 
     nest.ResetKernel()
     nest.verbosity = nest.VerbosityLevel.ERROR

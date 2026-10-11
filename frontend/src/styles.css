@@ -297,6 +297,12 @@ summary:focus-visible {
   align-items: start;
 }
 
+/* let grid columns shrink below a chart canvas's last pixel width */
+.live-top > *,
+.readout-row > * {
+  min-width: 0;
+}
+
 .stat-label {
   font-size: 1.1rem;
 }
@@ -352,6 +358,7 @@ summary:focus-visible {
 
 .panel-title {
   font-size: 0.95rem;
+  line-height: 1.4;
   font-weight: 600;
   margin: 18px 0 6px;
 }
@@ -571,7 +578,6 @@ summary:focus-visible {
 .pick-board .mb-cell.sel {
   background: var(--accent);
   color: #fff;
-  opacity: 1 !important;
 }
 
 .readout-row {

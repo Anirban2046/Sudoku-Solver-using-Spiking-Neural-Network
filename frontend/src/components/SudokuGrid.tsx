@@ -62,7 +62,7 @@ export default function SudokuGrid({ puzzle, editable, conflicts, live, onChange
 
   return (
     <div className="board-wrap">
-      <div className={`board${live ? " board-live" : ""}`} role="grid" aria-label="Sudoku grid">
+      <div className={`board${live ? " board-live" : ""}`} role="group" aria-label="Sudoku grid">
         {Array.from({ length: 81 }, (_, i) => {
           const r = rowOf(i);
           const c = colOf(i);
@@ -80,7 +80,7 @@ export default function SudokuGrid({ puzzle, editable, conflicts, live, onChange
           if (live?.silent[i]) title = "no spikes in this window; digit picked at random";
           else if (live?.tie[i]) title = "tie between digits; picked at random";
           return (
-            <div key={i} className={classes.join(" ")} role="gridcell">
+            <div key={i} className={classes.join(" ")}>
               <input
                 ref={(el) => {
                   refs.current[i] = el;

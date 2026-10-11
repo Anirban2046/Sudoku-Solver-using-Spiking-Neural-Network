@@ -1,4 +1,4 @@
-# Sudoku Solver using SNN
+# Sudoku Solver using Spiking Neural Network
 
 A web app that solves Sudoku with a **spiking neural network** simulated in
 [NEST](https://www.nest-simulator.org/). You enter a puzzle (or generate one)
@@ -6,7 +6,7 @@ and the network runs on the server. Every 100 ms of simulated time is streamed
 to the browser, so you watch the board settle and the network's activity
 change live. It keeps going until the puzzle is solved.
 
-![Screenshot: the board after a run, with the convergence and firing-rate charts](docs/screenshot.png)
+![Screenshot: the solved board, the performance plot and the network statistics](docs/screenshot.png)
 
 The network comes from the NEST example
 [`pynest/examples/sudoku`](https://github.com/nest/nest-simulator/tree/master/pynest/examples/sudoku)
@@ -15,7 +15,7 @@ implementation. It has 729 populations of 5 `iaf_psc_exp` neurons each (3,645
 neurons) and 521,235 synapses. The Sudoku rules are wired in as inhibition:
 each population inhibits the same digit in its row, column and box, and the
 other digits of its own cell. Given digits receive extra Poisson input, and
-background noise makes the network explore until no rule is broken.
+background noise makes the network explore until no rule is broken.0
 
 ## How it always finishes
 
@@ -38,8 +38,8 @@ unchanged network (`backend/snn/simulation.py`):
   network was struggling with, and they get the same Poisson input as a given.
   The network still solves every other cell. Hints only ever grow, so every
   puzzle is eventually solved. Easy puzzles normally finish before hints
-  start; for hard ones, the board shows hinted cells in teal and the results
-  say how many were needed. Set `HINT_AFTER_MS=-1` for a pure-SNN run.
+  start. Hints are not shown in the web interface; set `HINT_AFTER_MS=-1`
+  for a pure-network run.
 * **No overall time limit.** A request stops when its wall-clock budget runs
   out (`WALL_BUDGET_S`, default 240 s, below Vercel's 300 s limit). The browser
   then sends a follow-up request that rebuilds the network with a new seed and
@@ -48,17 +48,24 @@ unchanged network (`backend/snn/simulation.py`):
 
 ## What the page shows
 
-* **Live:** the board (network digits in grey italics, red bars and frames on
-  broken rows, columns and boxes), the time progressed, and two charts:
-  * performance and conflicting cell pairs over time (the network's "energy"
-    falling), with kicks and restarts marked;
-  * the firing rate of each cell's winning digit against the other eight (the
-    winner-take-all competition).
-  
-  After the run, a slider replays any window.
-* **Results:** headline metrics, a per-cell view of the final competition
-  between the 9 digit populations, the order in which cells settled, and a
-  diagram of how one population's inhibition encodes the rules.
+The page is dark-themed throughout.
+
+* **Input:** the 9×9 grid and three buttons: **Randomly Initialize** (a
+  36-given puzzle with one solution), **Clear Grid** and **Start Solving**.
+  Duplicates are highlighted while you type. After a run, editing a cell
+  continues from the board as shown.
+* **Live:** the board as the network reads it out every 100 ms (network
+  digits in light-blue italics, red bars and frames on broken rows, columns
+  and boxes), the time progressed, and a plot of performance over simulated
+  time. After the run, a slider replays any window.
+* **Inside the spiking network** (after the run):
+  * headline numbers: neurons, synapses, spikes fired, and the firing rates of
+    winning neurons against the rest;
+  * **one cell up close:** a raster of all 45 neurons of a chosen cell in the
+    final 100 ms, and the membrane potential of a winning neuron against a
+    runner-up neuron, recorded with a NEST multimeter;
+  * the winner-take-all competition across the board over time;
+  * the distribution of per-neuron firing rates.
 
 ## Run locally
 
@@ -143,7 +150,8 @@ backend/   FastAPI app (main.py) and the snn package:
            sudoku_net.py (NEST network, verbatim + one upstream bug fix),
            simulation.py (build, run loop, kick/restart/hint controller),
            engine.py (runs NEST on one dedicated thread),
-           analysis.py, helpers.py (validation, classical solver)
+           analysis.py (network statistics), encoding.py,
+           helpers.py (validation, classical solver)
 frontend/  Vite + React + TypeScript: grid, controls, live panel, results
 docs/      original build guide, reference copy of sudoku_net.py, screenshot
 ```

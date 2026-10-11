@@ -5,33 +5,38 @@ interface Props {
   check: StartCheck;
   conflictMessages: string[];
   error?: string | null;
+  canClear: boolean;
   onRandom: () => void;
+  onClear: () => void;
   onStart: () => void;
 }
 
-export default function Controls({ running, check, conflictMessages, error, onRandom, onStart }: Props) {
+export default function Controls({ running, check, conflictMessages, error, canClear, onRandom, onClear, onStart }: Props) {
   const startDisabled = running || !check.ok;
-  const hint = !check.ok ? check.reason : check.note;
+  const why = !check.ok ? check.reason : check.note;
   return (
     <div className="controls">
       <div className="buttons">
         <button type="button" onClick={onRandom} disabled={running}>
           Randomly Initialize
         </button>
+        <button type="button" onClick={onClear} disabled={running || !canClear}>
+          Clear Grid
+        </button>
         <button
           type="button"
           className="primary"
           onClick={onStart}
           disabled={startDisabled}
-          title={!running && hint ? hint : undefined}
-          aria-describedby={hint ? "start-hint" : undefined}
+          title={!running && why ? why : undefined}
+          aria-describedby={why ? "start-why" : undefined}
         >
           {running ? "Solving…" : "Start Solving"}
         </button>
       </div>
-      {hint && !running && (
-        <p id="start-hint" className="hint">
-          {hint}
+      {why && !running && (
+        <p id="start-why" className="start-why">
+          {why}
         </p>
       )}
       {conflictMessages.length > 0 && (

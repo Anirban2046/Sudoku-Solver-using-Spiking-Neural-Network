@@ -8,8 +8,6 @@ export interface LiveBoard {
   validCols: boolean[];
   validBoxes: boolean[];
   changed: Set<number>;
-  /** cells stimulated with their correct digit as a last-resort hint */
-  hinted: Set<number>;
 }
 
 interface Props {
@@ -75,7 +73,6 @@ export default function SudokuGrid({ puzzle, editable, conflicts, live, onChange
           if (r % 3 === 2 && r < 8) classes.push("edge-b");
           if (conflicts?.has(i)) classes.push("conflict");
           if (given) classes.push(live && live.grid[i] !== puzzle[i] ? "overridden" : "given");
-          else if (live?.hinted.has(i)) classes.push("hinted");
           else if (live) classes.push("network");
           return (
             <div key={i} className={classes.join(" ")}>

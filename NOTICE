@@ -1,5 +1,5 @@
-Sudoku Solver using SNN
-=======================
+Sudoku Solver using Spiking Neural Network
+==========================================
 
 This application runs the spiking-neural-network Sudoku solver from the NEST
 Simulator examples (pynest/examples/sudoku) and wraps it in a web interface.

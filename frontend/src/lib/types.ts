@@ -22,6 +22,8 @@ export interface MetaEvent {
   pop_size: number;
   n_populations: number;
   n_neurons: number;
+  neuron_model: string;
+  neuron: { V_th: number; V_reset: number; E_L: number; tau_m: number; t_ref: number };
   connections: Connections;
   givens: number;
   build_seconds: number;
@@ -75,9 +77,27 @@ export interface DoneEvent {
   final_grid: number[];
   wall_seconds: number;
   cells: { counts: number[][]; margin: number[]; margin_mean: number };
+  network: NetworkView;
   classical: { n_solutions: number; verdict: "match" | "valid_but_different" | "not_solved" };
   /** all hinted cells so far; passed on to a continuation request */
   hints: number[];
+}
+
+/** The spiking network in its final window (see backend analysis.network_view). */
+export interface NetworkView {
+  neurons_per_pop: number;
+  /** every spike: neuron index (0..3644) and time in 0.1 ms from the window start */
+  spikes: { neuron_b64: string; t_b64: string };
+  /** V_m in centi-mV of the first neuron of each cell's winning and runner-up population */
+  vm: { dt_ms: number; samples: number; winner_b64: string; rival_b64: string; rival_digit: number[] };
+  rates: {
+    window_ms: number;
+    winners_hz: number;
+    others_hz: number;
+    hist_edges_hz: number[];
+    hist_winners: number[];
+    hist_others: number[];
+  };
 }
 
 export interface ErrorEvent {

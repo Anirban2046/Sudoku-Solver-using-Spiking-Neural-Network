@@ -3,6 +3,7 @@ import json
 import numpy as np
 import pytest
 
+from snn.encoding import decode_b64
 from snn.engine import run_simulation
 from snn.helpers import generate_puzzle, get_puzzle
 
@@ -40,6 +41,28 @@ def test_step_payload(run40):
         assert len(step["grid"]) == 81
         assert step["rate_winners_hz"] > step["rate_losers_hz"]
         assert step["t_end_ms"] - step["t_start_ms"] == 100
+
+
+def test_network_view(run40):
+    _, events = run40
+    meta, last_step, done = events[0], events[-2], events[-1]
+    net = done["network"]
+    neurons = decode_b64(net["spikes"]["neuron_b64"], "<u2")
+    times = decode_b64(net["spikes"]["t_b64"], "<u2")
+    assert len(neurons) == len(times) == last_step["total_spikes"]
+    assert neurons.max() < meta["n_neurons"] and times.max() <= meta["chunk_ms"] * 10
+    n = net["vm"]["samples"]
+    winner = decode_b64(net["vm"]["winner_b64"], "<i2") / 100
+    rival = decode_b64(net["vm"]["rival_b64"], "<i2") / 100
+    assert len(winner) == len(rival) == 81 * n
+    assert winner.max() <= meta["neuron"]["V_th"] + 0.5  # V_m never sits above threshold
+    assert all(r != d for r, d in zip(net["vm"]["rival_digit"], done["final_grid"]))
+    rates = net["rates"]
+    assert rates["winners_hz"] > 5 * rates["others_hz"]
+    assert sum(rates["hist_winners"]) == 81 * meta["pop_size"]
+    assert sum(rates["hist_winners"]) + sum(rates["hist_others"]) == meta["n_neurons"]
+    assert len(json.dumps(done)) < 400_000
+    assert meta["connections"]["total"] == 521235  # the multimeter is not counted
 
 
 def test_continuation_offsets_time():

@@ -9,11 +9,37 @@ const cell = (r: number, c: number) => screen.getByLabelText(`row ${r} column ${
 const type = (r: number, c: number, key: string) => fireEvent.keyDown(cell(r, c), { key });
 
 describe("App", () => {
-  it("shows exactly the title, the grid and the two buttons", () => {
+  it("shows exactly the title, the grid and the three buttons", () => {
     render(<App />);
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Sudoku Solver using SNN");
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Sudoku Solver using Spiking Neural Network");
     expect(screen.getAllByRole("textbox")).toHaveLength(81);
-    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Randomly Initialize", "Start Solving"]);
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Randomly Initialize",
+      "Clear Grid",
+      "Start Solving",
+    ]);
+  });
+
+  it("clears the grid", () => {
+    render(<App />);
+    const clear = screen.getByRole("button", { name: "Clear Grid" }) as HTMLButtonElement;
+    expect(clear.disabled).toBe(true);
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Randomly Initialize" })));
+    expect(clear.disabled).toBe(false);
+    act(() => fireEvent.click(clear));
+    const filled = (screen.getAllByRole("textbox") as HTMLInputElement[]).filter((el) => el.value !== "");
+    expect(filled).toHaveLength(0);
+    expect(clear.disabled).toBe(true);
+  });
+
+  it("keeps the other digits when a cell is edited after Randomly Initialize", () => {
+    render(<App />);
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Randomly Initialize" })));
+    const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
+    const before = inputs.filter((el) => el.value).length;
+    const empty = inputs.findIndex((el) => !el.value);
+    act(() => fireEvent.keyDown(inputs[empty], { key: "1" }));
+    expect((screen.getAllByRole("textbox") as HTMLInputElement[]).filter((el) => el.value).length).toBe(before + 1);
   });
 
   it("disables Start until there are 17 givens", () => {

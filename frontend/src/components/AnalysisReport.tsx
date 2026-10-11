@@ -1,57 +1,50 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { ChartConfiguration } from "chart.js";
-import type { Grid } from "../lib/sudoku";
+import { b64ToI16, b64ToU16 } from "../lib/decode";
 import type { DoneEvent, MetaEvent, StepEvent } from "../lib/types";
+import CellRaster from "./CellRaster";
 import ChartCanvas, { COLORS } from "./ChartCanvas";
+import { RateChart } from "./RunCharts";
 
 interface Props {
-  puzzle: Grid;
   meta: MetaEvent;
   steps: StepEvent[];
   done: DoneEvent;
   /** wall-clock seconds of every request of the run */
   wallSeconds: number;
-  segments: number;
 }
 
 const fmt = (n: number, digits = 0) =>
   n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
-const cellName = (i: number) => `r${Math.floor(i / 9) + 1} c${(i % 9) + 1}`;
+const cellName = (i: number) => `row ${Math.floor(i / 9) + 1}, column ${(i % 9) + 1}`;
 
-function Card({ title, children }: { title: string; children: ReactNode }) {
+function Card({ title, lead, children }: { title: string; lead: ReactNode; children: ReactNode }) {
   return (
     <section className="card">
       <h3>{title}</h3>
+      <p className="lead">{lead}</p>
       {children}
     </section>
   );
 }
 
-export default function AnalysisReport({ puzzle, meta, steps, done, wallSeconds, segments }: Props) {
+export default function AnalysisReport({ meta, steps, done, wallSeconds }: Props) {
   const simMs = steps.length ? steps[steps.length - 1].t_end_ms : 0;
   const totalSpikes = steps.reduce((n, s) => n + s.total_spikes, 0);
-  const kicks = steps.filter((s) => s.kick?.kind === "kick").length;
-  const resets = steps.filter((s) => s.kick?.kind === "reset" || s.kick?.kind === "hint").length + segments - 1;
-  const hints = done.hints.length;
-  const firstHint = steps.find((s) => s.kick?.kind === "hint");
-  const verdict = {
-    match: "identical to the backtracking solver's solution",
-    valid_but_different: "valid, but different from the backtracking solver's (the puzzle has several solutions)",
-    not_solved: "not a valid grid",
-  }[done.classical.verdict];
+  const r = done.network.rates;
 
   const tiles: [string, string, string][] = [
-    ["Solved at", `${fmt(done.solved_at_ms ?? 0)} ms`, "simulated time"],
-    ["Wall time", `${fmt(wallSeconds, 1)} s`, `${fmt(simMs / Math.max(wallSeconds, 1e-9))} simulated ms per second`],
-    ["Kicks / restarts", `${kicks} / ${resets}`, hints ? `plus ${hints} hinted cells` : "interventions when progress stalled"],
-    ["Neurons", fmt(meta.n_neurons), `${fmt(meta.n_populations)} populations of ${meta.pop_size}`],
-    ["Synapses", fmt(meta.connections.total), `${fmt(meta.connections.inhibitory)} inhibitory`],
-    ["Spikes", fmt(totalSpikes), `${fmt(totalSpikes / (meta.n_neurons * (simMs / 1000)), 1)} Hz mean rate`],
+    ["Solved in", `${fmt(done.solved_at_ms ?? 0)} ms`, "of simulated network time"],
+    ["Neurons", fmt(meta.n_neurons), `${meta.neuron_model} (leaky integrate-and-fire)`],
+    ["Synapses", fmt(meta.connections.total), `${fmt(meta.connections.inhibitory)} of them inhibitory`],
+    ["Spikes fired", fmt(totalSpikes), `${fmt(totalSpikes / (meta.n_neurons * (simMs / 1000)), 1)} Hz per neuron on average`],
+    ["Winning neurons", `${fmt(r.winners_hz)} Hz`, `vs ${fmt(r.others_hz, 1)} Hz for all the others`],
+    ["Wall time", `${fmt(wallSeconds, 1)} s`, `${fmt(simMs / Math.max(wallSeconds, 1e-9))} ms of network time per second`],
   ];
 
   return (
-    <section className="report" aria-label="Results">
-      <h2>How the network solved it</h2>
+    <section className="report" aria-label="Inside the spiking network">
+      <h2>Inside the spiking network</h2>
       <div className="tiles">
         {tiles.map(([label, value, sub]) => (
           <div className="tile" key={label}>
@@ -61,61 +54,110 @@ export default function AnalysisReport({ puzzle, meta, steps, done, wallSeconds,
           </div>
         ))}
       </div>
-      {hints > 0 && firstHint && (
-        <p className="hint-note">
-          The network didn't settle on its own within {fmt(firstHint.t_end_ms)} ms, so {hints} of the{" "}
-          {81 - meta.givens} empty cells were hinted: their correct digit was stimulated like a given. The network solved
-          the other {81 - meta.givens - hints}.
-        </p>
-      )}
-      <p className="note">
-        Answer check: {verdict}. Seed {meta.seed}
-        {segments > 1 ? ` (last of ${segments} requests)` : ""}, NEST {meta.nest_version}.
-      </p>
-      <div className="cards">
-        <CellCompetition grid={done.final_grid} cells={done.cells} chunkMs={meta.chunk_ms} />
-        <LockIn puzzle={puzzle} steps={steps} />
-        <Wiring meta={meta} />
-      </div>
+      <CellInspector meta={meta} done={done} />
+      <Card
+        title="Winner-take-all, across the board"
+        lead="In every cell one digit population takes over and silences its rivals. The neurons of the winning digits speed up while everyone else is pushed towards silence."
+      >
+        <RateChart steps={steps} />
+      </Card>
+      <RateHistogram rates={r} />
     </section>
   );
 }
 
-function CellCompetition({ grid, cells, chunkMs }: { grid: number[]; cells: DoneEvent["cells"]; chunkMs: number }) {
-  const [cell, setCell] = useState(() => cells.margin.indexOf(Math.min(...cells.margin)));
-  const config = useMemo<ChartConfiguration>(
-    () => ({
-      type: "bar",
+function CellInspector({ meta, done }: { meta: MetaEvent; done: DoneEvent }) {
+  const net = done.network;
+  const grid = done.final_grid;
+  const [cell, setCell] = useState(() => done.cells.margin.indexOf(Math.min(...done.cells.margin)));
+
+  const spikes = useMemo(
+    () => ({ neuron: b64ToU16(net.spikes.neuron_b64), t: b64ToU16(net.spikes.t_b64) }),
+    [net.spikes.neuron_b64, net.spikes.t_b64],
+  );
+  const vm = useMemo(
+    () => ({ winner: b64ToI16(net.vm.winner_b64), rival: b64ToI16(net.vm.rival_b64) }),
+    [net.vm.winner_b64, net.vm.rival_b64],
+  );
+
+  const perPop = net.neurons_per_pop;
+  const windowMs = net.vm.samples * net.vm.dt_ms;
+  const winner = grid[cell];
+  const rival = net.vm.rival_digit[cell];
+
+  const rows = useMemo(() => {
+    const out: number[][] = Array.from({ length: 9 * perPop }, () => []);
+    const first = cell * 9 * perPop;
+    for (let i = 0; i < spikes.neuron.length; i++) {
+      const k = spikes.neuron[i] - first;
+      if (k >= 0 && k < 9 * perPop) out[k].push(spikes.t[i] / 10);
+    }
+    return out;
+  }, [spikes, cell, perPop]);
+
+  const vmConfig = useMemo<ChartConfiguration>(() => {
+    const n = net.vm.samples;
+    const trace = (arr: Int16Array) =>
+      Array.from(arr.subarray(cell * n, cell * n + n), (v, i) => ({ x: (i + 1) * net.vm.dt_ms, y: v / 100 }));
+    return {
+      type: "line",
       data: {
-        labels: ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
         datasets: [
           {
-            label: "spikes",
-            data: cells.counts[cell],
-            backgroundColor: cells.counts[cell].map((_, d) => (d + 1 === grid[cell] ? COLORS.green : COLORS.grey)),
+            label: `a neuron of digit ${winner} (winner)`,
+            data: trace(vm.winner),
+            borderColor: COLORS.sky,
+            backgroundColor: COLORS.sky,
+            borderWidth: 1.5,
+            pointRadius: 0,
+          },
+          {
+            label: `a neuron of digit ${rival} (runner-up)`,
+            data: trace(vm.rival),
+            borderColor: COLORS.violet,
+            backgroundColor: COLORS.violet,
+            borderWidth: 1.5,
+            pointRadius: 0,
+          },
+          {
+            label: `firing threshold (${meta.neuron.V_th} mV)`,
+            data: [
+              { x: 0, y: meta.neuron.V_th },
+              { x: windowMs, y: meta.neuron.V_th },
+            ],
+            borderColor: COLORS.amber,
+            backgroundColor: COLORS.amber,
+            borderDash: [5, 4],
+            borderWidth: 1,
+            pointRadius: 0,
           },
         ],
       },
       options: {
         animation: false,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        parsing: false,
+        interaction: { mode: "nearest", axis: "x", intersect: false },
         scales: {
-          x: { title: { display: true, text: "digit population" } },
-          y: { beginAtZero: true, title: { display: true, text: `spikes in the last ${chunkMs} ms` } },
+          x: { type: "linear", min: 0, max: windowMs, title: { display: true, text: "time in the final window (ms)" } },
+          y: { grace: "5%", title: { display: true, text: "membrane potential (mV)" } },
         },
       },
-    }),
-    [cell, cells, grid, chunkMs],
-  );
+    };
+  }, [vm, cell, winner, rival, net.vm.samples, net.vm.dt_ms, windowMs, meta.neuron.V_th]);
+
   return (
-    <Card title="Winner-take-all inside each cell">
-      <p>
-        Each cell has 9 competing populations, one per digit, and the most active one is the answer. Pick a cell to see the
-        competition in the final window. Orange cells were the closest contests; the mean decision margin was{" "}
-        {fmt(cells.margin_mean * 100)}%.
-      </p>
-      <div className="split">
+    <Card
+      title="One cell, up close"
+      lead={
+        <>
+          Every cell holds 9 populations of {perPop} neurons, one per digit. Pick a cell to see all {9 * perPop} of its
+          neurons spike in the final {fmt(windowMs)} ms, and the membrane potential of a winning neuron against one from
+          the runner-up digit. Amber cells were the closest contests.
+        </>
+      }
+    >
+      <div className="inspector">
         <div className="mini-board pick-board" role="group" aria-label="Pick a cell">
           {grid.map((d, i) => (
             <button
@@ -125,112 +167,67 @@ function CellCompetition({ grid, cells, chunkMs }: { grid: number[]; cells: Done
               onClick={() => setCell(i)}
               aria-label={`${cellName(i)}, digit ${d}`}
               aria-pressed={i === cell}
-              style={i === cell ? undefined : { background: `rgba(217, 130, 43, ${(0.55 * (1 - cells.margin[i])).toFixed(3)})` }}
+              style={i === cell ? undefined : { background: `rgba(251, 191, 36, ${(0.4 * (1 - done.cells.margin[i])).toFixed(3)})` }}
             >
               {d}
             </button>
           ))}
         </div>
-        <div className="split-chart">
+        <div className="inspector-plots">
           <div className="chart-caption">
-            {cellName(cell)}: digit {grid[cell]} won, margin {fmt(cells.margin[cell] * 100)}%
+            {cellName(cell)}: digit <span className="win">{winner}</span> won, digit <span className="rival">{rival}</span>{" "}
+            came second
           </div>
-          <ChartCanvas config={config} height={220} label={`Digit spike counts for ${cellName(cell)}`} />
+          <CellRaster
+            rows={rows}
+            perPop={perPop}
+            windowMs={windowMs}
+            winner={winner}
+            rival={rival}
+            label={`Spike raster of the ${9 * perPop} neurons of ${cellName(cell)}`}
+          />
+          <ChartCanvas config={vmConfig} height={230} label={`Membrane potentials in ${cellName(cell)}`} />
         </div>
       </div>
     </Card>
   );
 }
 
-function LockIn({ puzzle, steps }: { puzzle: Grid; steps: StepEvent[] }) {
-  const lockMs = useMemo(() => {
-    const out = Array<number>(81).fill(steps[0]?.t_end_ms ?? 0);
-    steps.forEach((s, k) => {
-      const prev = k ? steps[k - 1].grid : puzzle;
-      s.grid.forEach((d, i) => {
-        if (d !== prev[i]) out[i] = s.t_end_ms;
-      });
-    });
-    return out;
-  }, [puzzle, steps]);
-  const max = Math.max(...lockMs);
+function RateHistogram({ rates }: { rates: DoneEvent["network"]["rates"] }) {
+  const config = useMemo<ChartConfiguration>(() => {
+    const e = rates.hist_edges_hz;
+    return {
+      type: "bar",
+      data: {
+        labels: rates.hist_winners.map((_, i) => `${fmt(e[i])}–${fmt(e[i + 1])}`),
+        datasets: [
+          { label: "winning digits' neurons", data: rates.hist_winners, backgroundColor: COLORS.sky, borderRadius: 3 },
+          { label: "all other neurons", data: rates.hist_others, backgroundColor: COLORS.grey, borderRadius: 3 },
+        ],
+      },
+      options: {
+        animation: false,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { boxHeight: 10, boxWidth: 14 } } },
+        scales: {
+          x: { title: { display: true, text: "firing rate (Hz)" }, ticks: { maxRotation: 0, autoSkip: true } },
+          y: {
+            type: "logarithmic",
+            min: 0.8,
+            title: { display: true, text: "neurons (log scale)" },
+            // label only 1, 10, 100, 1,000
+            ticks: { callback: (v) => (Number.isInteger(Math.log10(Number(v))) ? fmt(Number(v)) : "") },
+          },
+        },
+      },
+    };
+  }, [rates]);
   return (
-    <Card title="Order in which the cells settled">
-      <p>
-        When each cell took its final digit (darker = later). Given cells (underlined) lock in almost at once; the empty
-        cells follow as inhibition pushes the rival digits out.
-      </p>
-      <div className="mini-board heat-board">
-        {lockMs.map((ms, i) => (
-          <div
-            key={i}
-            className={`mb-cell${puzzle[i] ? " given" : ""}`}
-            style={{ background: `rgba(31, 79, 138, ${max ? 0.04 + (0.46 * ms) / max : 0.04})` }}
-            title={`${cellName(i)}: final digit since ${fmt(ms)} ms`}
-          >
-            <span className="mb-sub">{fmt(ms)}</span>
-          </div>
-        ))}
-      </div>
-      <p className="note">Numbers are milliseconds of simulated time.</p>
-    </Card>
-  );
-}
-
-function Wiring({ meta }: { meta: MetaEvent }) {
-  // Source population: digit 5 of the centre cell.
-  const s = 20;
-  const kind = (r: number, c: number) => {
-    if (r === 4 && c === 4) return "src";
-    if (r === 4) return "row";
-    if (c === 4) return "col";
-    if (Math.floor(r / 3) === 1 && Math.floor(c / 3) === 1) return "box";
-    return "";
-  };
-  const fill: Record<string, string> = { src: COLORS.ink, row: COLORS.blue, col: COLORS.green, box: COLORS.orange, "": "#fff" };
-  return (
-    <Card title="How the Sudoku rules are wired">
-      <p>
-        The rules are synapses, not code. The population for “5 in the centre cell” inhibits every population that would
-        break a rule with it: the 5s in its row, column and box, and the other 8 digits of its own cell, so each neuron
-        inhibits {fmt(meta.connections.inhibitory / meta.n_neurons)} others. Given digits get an extra {fmt(meta.stim_rate)} Hz
-        input, and {fmt(meta.noise_rate)} Hz of random noise keeps the network exploring until no rule is broken.
-      </p>
-      <figure className="diagram">
-        <svg viewBox={`0 0 ${9 * s + 110} ${9 * s + 4}`} width="100%" style={{ maxWidth: 360 }} role="img"
-          aria-label="Populations inhibited by the digit-5 population of the centre cell">
-          <g transform="translate(2,2)">
-            {Array.from({ length: 81 }, (_, i) => {
-              const k = kind(Math.floor(i / 9), i % 9);
-              return <rect key={i} x={(i % 9) * s} y={Math.floor(i / 9) * s} width={s} height={s} fill={fill[k]}
-                fillOpacity={k && k !== "src" ? 0.75 : 1} stroke="#bbb" strokeWidth={0.5} />;
-            })}
-            {[0, 3, 6, 9].map((v) => (
-              <g key={v}>
-                <line x1={v * s} y1={0} x2={v * s} y2={9 * s} stroke="#222" strokeWidth={1.5} />
-                <line x1={0} y1={v * s} x2={9 * s} y2={v * s} stroke="#222" strokeWidth={1.5} />
-              </g>
-            ))}
-            <text x={4.5 * s} y={4.5 * s + 4} textAnchor="middle" fill="#fff" fontSize={11}>5</text>
-            <g transform={`translate(${9 * s + 18}, ${3 * s})`}>
-              {Array.from({ length: 9 }, (_, d) => (
-                <g key={d}>
-                  <rect x={(d % 3) * s} y={Math.floor(d / 3) * s} width={s} height={s}
-                    fill={d === 4 ? COLORS.ink : COLORS.purple} fillOpacity={d === 4 ? 1 : 0.7} stroke="#fff" />
-                  <text x={(d % 3) * s + s / 2} y={Math.floor(d / 3) * s + s / 2 + 4} textAnchor="middle" fill="#fff" fontSize={10}>{d + 1}</text>
-                </g>
-              ))}
-              <text x={1.5 * s} y={-6} textAnchor="middle" fontSize={10} fill="#333">centre cell</text>
-            </g>
-          </g>
-        </svg>
-        <figcaption>
-          <span className="swatch" style={{ background: COLORS.blue }} /> same row
-          <span className="swatch" style={{ background: COLORS.green }} /> same column
-          <span className="swatch" style={{ background: COLORS.orange }} /> same box
-          <span className="swatch" style={{ background: COLORS.purple }} /> other digits of the cell
-        </figcaption>
-      </figure>
+    <Card
+      title="How fast each neuron fires"
+      lead={`Firing rates of all neurons over the last ${fmt(rates.window_ms)} ms. The network splits into two groups: a few hundred winners firing fast, and thousands of neurons held almost silent by inhibition.`}
+    >
+      <ChartCanvas config={config} height={240} label="Histogram of per-neuron firing rates" />
     </Card>
   );
 }

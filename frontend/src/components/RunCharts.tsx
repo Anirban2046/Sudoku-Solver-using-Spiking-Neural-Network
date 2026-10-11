@@ -9,28 +9,22 @@ interface Props {
   cursorMs?: number | null;
 }
 
-function kickMarkers(steps: StepEvent[], cursorMs?: number | null): Marker[] {
-  const lines: Marker[] = steps
-    .filter((s) => s.kick)
-    .map((s) => ({ x: s.t_end_ms, color: { kick: COLORS.purple, reset: COLORS.red, hint: COLORS.green }[s.kick!.kind], dash: [3, 3] }));
-  if (cursorMs != null) lines.push({ x: cursorMs, color: COLORS.orange });
-  return lines;
-}
-
-const xAxis = (max: number) => ({
+const xAxis = (steps: StepEvent[]) => ({
   type: "linear" as const,
   min: 0,
-  max,
+  // grows with the run: 1, 2 or 5 x 10^n ms
+  max: niceMax(steps.length ? steps[steps.length - 1].t_end_ms : 0),
   title: { display: true, text: "simulated time (ms)" },
   ticks: { maxTicksLimit: 8 },
 });
 
-/** Performance and rule violations over time: the network relaxing towards a
- *  valid grid, like the energy of a Hopfield network. */
-export function ConvergenceChart({ steps, cursorMs }: Props) {
+const cursor = (cursorMs?: number | null): Marker[] => (cursorMs != null ? [{ x: cursorMs, color: COLORS.amber }] : []);
+
+/** Performance (fraction of valid rows, columns and boxes) over simulated time,
+ *  as in the NEST example's progress plot. */
+export function PerformanceChart({ steps, cursorMs }: Props) {
   const config = useMemo<ChartConfiguration>(() => {
-    const xMax = niceMax(steps.length ? steps[steps.length - 1].t_end_ms : 0);
-    const maxViol = Math.max(4, ...steps.map((s) => s.violations));
+    const top = Math.max(1, ...steps.map((s) => s.performance));
     return {
       type: "line",
       data: {
@@ -38,20 +32,12 @@ export function ConvergenceChart({ steps, cursorMs }: Props) {
           {
             label: "performance",
             data: steps.map((s) => ({ x: s.t_start_ms, y: s.performance })),
-            borderColor: COLORS.blue,
-            backgroundColor: COLORS.blue,
+            borderColor: COLORS.sky,
+            backgroundColor: "rgba(56, 189, 248, 0.12)",
+            fill: "origin",
             borderWidth: 2,
-            pointRadius: steps.map((s) => (s.givens_overridden ? 3 : 0)),
-            pointBackgroundColor: COLORS.orange,
-            yAxisID: "y",
-          },
-          {
-            label: "rule violations",
-            data: steps.map((s) => ({ x: s.t_start_ms, y: s.violations })),
-            borderColor: COLORS.red,
-            borderWidth: 1.5,
             pointRadius: 0,
-            yAxisID: "y2",
+            tension: 0.15,
           },
         ],
       },
@@ -62,44 +48,37 @@ export function ConvergenceChart({ steps, cursorMs }: Props) {
         normalized: true,
         interaction: { mode: "nearest", axis: "x", intersect: false },
         scales: {
-          x: xAxis(xMax),
-          y: { min: 0, max: 1, title: { display: true, text: "performance" } },
-          y2: {
-            position: "right",
-            min: 0,
-            suggestedMax: maxViol,
-            ticks: { precision: 0 },
-            title: { display: true, text: "conflicting cell pairs" },
-            grid: { drawOnChartArea: false },
-          },
+          x: xAxis(steps),
+          // starts at 0..1 and stretches if a value ever goes beyond it
+          y: { min: 0, suggestedMax: top, title: { display: true, text: "performance" } },
         },
-        plugins: { markers: { lines: kickMarkers(steps, cursorMs) }, legend: { labels: { boxHeight: 2 } } },
+        plugins: { legend: { display: false }, markers: { lines: cursor(cursorMs) } },
       },
     };
   }, [steps, cursorMs]);
-  return <ChartCanvas config={config} height={240} label="Performance and rule violations over time" />;
+  return <ChartCanvas config={config} height={260} label="Performance over simulated time" />;
 }
 
-/** Firing rate of the populations that currently win their cell versus the
- *  rest: the winner-take-all competition inside every cell. */
-export function RateChart({ steps, cursorMs }: Props) {
+/** Firing rate of the population that currently wins each cell, against all
+ *  other neurons: the winner-take-all competition emerging over time. */
+export function RateChart({ steps }: Props) {
   const config = useMemo<ChartConfiguration>(() => {
-    const xMax = niceMax(steps.length ? steps[steps.length - 1].t_end_ms : 0);
-    const yMax = niceMax(Math.max(...steps.map((s) => s.rate_winners_hz), 10) * 1.1, 10);
-    const line = (label: string, key: keyof StepEvent, color: string) => ({
+    const line = (label: string, key: "rate_winners_hz" | "rate_losers_hz" | "rate_all_hz", color: string, width = 2) => ({
       label,
-      data: steps.map((s) => ({ x: s.t_start_ms, y: s[key] as number })),
+      data: steps.map((s) => ({ x: s.t_start_ms, y: s[key] })),
       borderColor: color,
-      borderWidth: 2,
+      backgroundColor: color,
+      borderWidth: width,
       pointRadius: 0,
+      tension: 0.15,
     });
     return {
       type: "line",
       data: {
         datasets: [
-          line("winning digit of each cell", "rate_winners_hz", COLORS.green),
-          line("all neurons", "rate_all_hz", COLORS.ink),
-          line("other 8 digits", "rate_losers_hz", COLORS.grey),
+          line("winning digit's neurons", "rate_winners_hz", COLORS.sky),
+          line("all neurons", "rate_all_hz", COLORS.violet, 1.5),
+          line("the other 8 digits' neurons", "rate_losers_hz", COLORS.grey, 1.5),
         ],
       },
       options: {
@@ -109,12 +88,11 @@ export function RateChart({ steps, cursorMs }: Props) {
         normalized: true,
         interaction: { mode: "nearest", axis: "x", intersect: false },
         scales: {
-          x: xAxis(xMax),
-          y: { min: 0, max: yMax, title: { display: true, text: "firing rate (Hz)" } },
+          x: xAxis(steps),
+          y: { beginAtZero: true, grace: "8%", title: { display: true, text: "firing rate (Hz)" } },
         },
-        plugins: { markers: { lines: kickMarkers(steps, cursorMs) }, legend: { labels: { boxHeight: 2 } } },
       },
     };
-  }, [steps, cursorMs]);
-  return <ChartCanvas config={config} height={220} label="Firing rate of winning and losing populations over time" />;
+  }, [steps]);
+  return <ChartCanvas config={config} height={240} label="Firing rate of winning and other neurons over time" />;
 }

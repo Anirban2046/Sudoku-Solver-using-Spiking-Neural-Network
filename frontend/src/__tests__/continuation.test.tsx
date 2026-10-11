@@ -18,9 +18,23 @@ vi.mock("../components/ChartCanvas", async (importOriginal) => ({
 
 afterEach(cleanup);
 
+// jsdom has neither ResizeObserver nor a canvas; the raster just draws nothing.
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    disconnect() {}
+  },
+);
+HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;
+
+// 81 cells x 2 samples of int16 zeros, base64
+const ZEROS = btoa(String.fromCharCode(...Array(81 * 2 * 2).fill(0)));
+
 const meta = (segment: number, t_offset_ms: number): MetaEvent => ({
   type: "meta", seed: 7 + segment, segment, t_offset_ms, nest_version: "3.10.0", threads: 1, chunk_ms: 100,
   noise_rate: 350, stim_rate: 200, pop_size: 5, n_populations: 729, n_neurons: 3645,
+  neuron_model: "iaf_psc_exp", neuron: { V_th: -50, V_reset: -70, E_L: -65, tau_m: 20, t_ref: 2 },
   connections: { inhibitory: 510300, noise: 3645, stimulus: 3645, stimulus_active: 180, recorder: 3645, total: 521235 },
   givens: 36, build_seconds: 1, wall_budget_s: 240, kick_ms: 50, patience: 5, hints: [], hint_after_ms: 15000,
 });
@@ -37,6 +51,12 @@ const done = (solved: boolean, t_end_ms: number, grid: number[]): DoneEvent => (
   type: "done", solved, resume: !solved, solved_at_ms: solved ? t_end_ms - 100 : null, t_end_ms, final_grid: grid,
   wall_seconds: 10, cells: { counts: Array.from({ length: 81 }, () => [9, 1, 0, 0, 0, 0, 0, 0, 0]), margin: Array(81).fill(0.9), margin_mean: 0.9 },
   classical: { n_solutions: 1, verdict: solved ? "match" : "not_solved" }, hints: [5, 6],
+  network: {
+    neurons_per_pop: 5,
+    spikes: { neuron_b64: btoa(String.fromCharCode(0, 0, 50, 0)), t_b64: btoa(String.fromCharCode(10, 0, 20, 0)) },
+    vm: { dt_ms: 50, samples: 2, winner_b64: ZEROS, rival_b64: ZEROS, rival_digit: Array(81).fill(2) },
+    rates: { window_ms: 100, winners_hz: 220, others_hz: 6.5, hist_edges_hz: [0, 100, 200, 300], hist_winners: [0, 10, 395], hist_others: [3000, 240, 0] },
+  },
 });
 
 describe("continuation across requests", () => {
@@ -62,19 +82,26 @@ describe("continuation across requests", () => {
 
     expect(calls).toEqual([{ t_offset_ms: 0, segment: 0, hints: [] }, { t_offset_ms: 100, segment: 1, hints: [5, 6] }]);
     expect(await screen.findByText("solved at 100 ms")).toBeTruthy();
-    expect(await screen.findByText("How the network solved it", {}, { timeout: 10000 })).toBeTruthy();
-    // no kicks; two restarts (the hint restart and the second request), in the live stats and the results tile
-    expect(screen.getAllByText("0 / 2")).toHaveLength(2);
-    expect(screen.getByText(/2 of the 45 empty cells were hinted/)).toBeTruthy();
+    expect(await screen.findByText("Inside the spiking network", {}, { timeout: 10000 })).toBeTruthy();
+    expect(screen.getByText("220 Hz")).toBeTruthy(); // winning neurons tile
+    expect(screen.queryByText(/hint/i)).toBeNull(); // nothing about hints is shown
+
+    // editing after the run keeps the solved board and changes only that cell
+    const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
+    act(() => fireEvent.keyDown(inputs[0], { key: "5" }));
+    const after = screen.getAllByRole("textbox") as HTMLInputElement[];
+    expect(after.filter((el) => el.value).length).toBe(81);
+    expect(after[0].value).toBe("5");
   }, 20000);
 });
 
 describe("niceMax", () => {
-  it("rounds axis maxima up to 1, 2 or 5 x 10^n", () => {
+  it("rounds axis maxima up to a close round number", () => {
     expect(niceMax(0)).toBe(1000);
-    expect(niceMax(1300)).toBe(2000);
-    expect(niceMax(2100)).toBe(5000);
+    expect(niceMax(1300)).toBe(1500);
+    expect(niceMax(2100)).toBe(2500);
+    expect(niceMax(24100)).toBe(25000);
     expect(niceMax(5000)).toBe(5000);
-    expect(niceMax(73, 10)).toBe(100);
+    expect(niceMax(73, 10)).toBe(80);
   });
 });

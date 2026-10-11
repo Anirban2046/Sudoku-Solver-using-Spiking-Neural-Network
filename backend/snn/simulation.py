@@ -37,17 +37,20 @@ while every request stays within the host's function timeout.
 
 import os
 import time
+from collections import deque
 
 import nest
 import numpy as np
 
 from . import sudoku_net
-from .analysis import cell_summary, classical_check, count_violations, conflict_cells
+from .analysis import cell_summary, classical_check, conflict_cells, count_violations, network_view
 from .helpers import PEERS, solve_all, validate_solution
 from .sudoku_net import SudokuNet
 
 KICK_I_E = -5.0  # bias current (nA scale, as neuron_params) that silences a population
 RESETS_AFTER_FUTILE_KICKS = 4
+VM_INTERVAL_MS = 1.0  # membrane-potential sampling of one neuron per population
+RATE_WINDOW_MS = 1000  # span of the final firing-rate statistics
 
 
 def _threads():
@@ -78,6 +81,23 @@ def _connections(net):
         "recorder": int(n_recorder),
         "total": int(nest.num_connections),
     }
+
+
+def _vm_matrix(multimeter, first_gid, pop_size, t_start, chunk_ms):
+    """Last window's V_m samples as a (729, samples) array, one row per population."""
+    n = int(round(chunk_ms / VM_INTERVAL_MS))
+    vm = np.full((729, n), np.nan)
+    ev = multimeter.get("events")
+    pops = (np.asarray(ev["senders"]) - first_gid) // pop_size
+    cols = np.rint((np.asarray(ev["times"]) - t_start) / VM_INTERVAL_MS).astype(int) - 1
+    ok = (cols >= 0) & (cols < n)
+    vm[pops[ok], cols[ok]] = np.asarray(ev["V_m"])[ok]
+    # fill any gap (none expected) with the previous sample
+    for row in vm:
+        for i in range(1, n):
+            if np.isnan(row[i]):
+                row[i] = row[i - 1]
+    return np.nan_to_num(vm, nan=-65.0)
 
 
 def _readout(counts, rng):
@@ -178,6 +198,12 @@ def run(
     add_hints([c for c in hints if puzzle.reshape(81)[c] == 0])
     connections = _connections(net)
 
+    # Record V_m of the first neuron of every population (created after counting
+    # connections, so the counts describe the network itself).
+    multimeter = nest.Create("multimeter", params={"record_from": ["V_m"], "interval": VM_INTERVAL_MS})
+    nest.Connect(multimeter, net.neurons[::pop_size])
+    first_gid = net.neurons[0].global_id
+
     yield {
         "type": "meta",
         "seed": int(seed),
@@ -191,6 +217,8 @@ def run(
         "pop_size": int(net.pop_size),
         "n_populations": int(net.n_populations),
         "n_neurons": int(net.n_total),
+        "neuron_model": "iaf_psc_exp",
+        "neuron": {k: sudoku_net.neuron_params[k] for k in ("V_th", "V_reset", "E_L", "tau_m", "t_ref")},
         "connections": connections,
         "givens": int((puzzle != 0).sum()),
         "build_seconds": round(build_seconds, 3),
@@ -205,6 +233,9 @@ def run(
     prev_grid = puzzle.copy()
     grid = puzzle.copy()
     pop_counts = np.zeros(729, dtype=np.int64)
+    neuron_idx = np.zeros(0, dtype=np.int64)
+    spike_times = np.zeros(0)
+    recent_neuron_counts = deque(maxlen=max(1, RATE_WINDOW_MS // chunk_ms))
     valid = False
     k = 0
     pending_kick = []  # (cell, digit) populations to silence at the start of the next window
@@ -219,6 +250,7 @@ def run(
         t_end = t_start + chunk_ms
 
         net.reset_spike_recorders()
+        multimeter.n_events = 0
         if pending_kick:
             ids = sorted(int(net.neuron_indices[c // 9, c % 9, d - 1, n]) for c, d in pending_kick for n in range(pop_size))
             silenced = net.neurons[ids]
@@ -232,6 +264,9 @@ def run(
 
         trains = net.get_spike_trains()
         pop_counts = np.array([len(tr["times"]) for tr in trains], dtype=np.int64)
+        neuron_idx = np.concatenate([np.asarray(tr["senders"], dtype=np.int64) for tr in trains]) - first_gid
+        spike_times = np.concatenate([np.asarray(tr["times"], dtype=float) for tr in trains]) - t_start
+        recent_neuron_counts.append(np.bincount(neuron_idx, minlength=net.n_total))
 
         grid = _readout(pop_counts.reshape(9, 9, 9), rng)
         valid, boxes, rows, cols = validate_solution(puzzle, grid)
@@ -308,6 +343,16 @@ def run(
         "final_grid": grid.reshape(81).tolist(),
         "wall_seconds": round(time.time() - t_run, 3),
         "cells": cell_summary(pop_counts),
+        "network": network_view(
+            grid=grid,
+            pop_counts=pop_counts,
+            pop_size=pop_size,
+            chunk_ms=chunk_ms,
+            neuron_idx=neuron_idx,
+            spike_t=spike_times,
+            vm=_vm_matrix(multimeter, first_gid, pop_size, t_start, chunk_ms),
+            recent_neuron_counts=list(recent_neuron_counts),
+        ),
         "classical": classical_check(puzzle, grid, bool(valid)),
         "hints": list(hinted),
     }

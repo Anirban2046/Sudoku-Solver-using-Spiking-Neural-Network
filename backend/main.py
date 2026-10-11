@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-app = FastAPI(title="Sudoku Solver using SNN")
+app = FastAPI(title="Sudoku Solver using Spiking Neural Network")
 
 _cors = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
 if _cors:

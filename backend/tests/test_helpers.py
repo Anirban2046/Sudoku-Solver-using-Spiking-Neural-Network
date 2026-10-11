@@ -94,3 +94,10 @@ def test_classical_check():
     sol = solved_grid()
     assert classical_check(puzzle, sol, True)["verdict"] == "match"
     assert classical_check(puzzle, sol, False)["verdict"] == "not_solved"
+
+
+def test_b64_roundtrip():
+    from snn.encoding import b64_i16, b64_u16, decode_b64
+
+    assert decode_b64(b64_u16([0, 1, 728, 65535]), "<u2").tolist() == [0, 1, 728, 65535]
+    assert decode_b64(b64_i16([-31039.6, -5000, 0, 40000]), "<i2").tolist() == [-31040, -5000, 0, 32767]

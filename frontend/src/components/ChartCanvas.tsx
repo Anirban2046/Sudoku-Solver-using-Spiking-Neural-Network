@@ -4,8 +4,10 @@ import {
   BarElement,
   CategoryScale,
   Chart,
+  Filler,
   Legend,
   LinearScale,
+  LogarithmicScale,
   LineController,
   LineElement,
   PointElement,
@@ -14,7 +16,28 @@ import {
   type Plugin,
 } from "chart.js";
 
-Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Legend, Tooltip);
+Chart.register(
+  LineController,
+  LineElement,
+  PointElement,
+  BarController,
+  BarElement,
+  LinearScale,
+  LogarithmicScale,
+  CategoryScale,
+  Filler,
+  Legend,
+  Tooltip,
+);
+
+// Dark theme defaults for every chart.
+Chart.defaults.color = "#9aa8c3";
+Chart.defaults.borderColor = "rgba(148, 163, 184, 0.14)";
+Chart.defaults.font.family = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+Chart.defaults.plugins.legend.labels.boxHeight = 2;
+Chart.defaults.plugins.tooltip.backgroundColor = "#1b2540";
+Chart.defaults.plugins.tooltip.borderColor = "#2c3a5c";
+Chart.defaults.plugins.tooltip.borderWidth = 1;
 
 export interface Marker {
   x: number;
@@ -28,7 +51,7 @@ declare module "chart.js" {
   }
 }
 
-/** Draws vertical lines at given x values (kicks, restarts, replay cursor). */
+/** Draws vertical lines at given x values (e.g. the replay cursor). */
 const markersPlugin: Plugin = {
   id: "markers",
   afterDatasetsDraw(chart) {
@@ -97,18 +120,19 @@ export default function ChartCanvas({ config, height = 220, label }: Props) {
 }
 
 export const COLORS = {
-  ink: "#1d2b3a",
-  blue: "#2f6db5",
-  orange: "#d9822b",
-  green: "#2e8b57",
-  red: "#c0392b",
-  purple: "#7d4fb0",
-  grey: "#8a96a3",
+  text: "#e6ebf5",
+  sky: "#38bdf8",
+  violet: "#a78bfa",
+  green: "#34d399",
+  amber: "#fbbf24",
+  red: "#f87171",
+  grey: "#64748b",
 };
 
-/** A "nice" axis maximum (1, 2 or 5 x 10^n) at or above `v`, at least `min`. */
+/** A round axis maximum at or just above `v` (at least `min`), so the data
+ *  fills most of the plot: 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6 or 8 x 10^n. */
 export function niceMax(v: number, min = 1000) {
   const x = Math.max(v, min);
   const p = 10 ** Math.floor(Math.log10(x));
-  return [1, 2, 5, 10].map((m) => m * p).find((m) => m >= x)!;
+  return [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map((m) => Math.round(m * p)).find((m) => m >= x)!;
 }

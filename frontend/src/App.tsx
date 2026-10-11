@@ -51,14 +51,28 @@ export default function App() {
     setError(null);
   };
 
+  // The board on screen after a run (the network's digits), if any. Editing a
+  // cell then continues from exactly what is shown instead of dropping back to
+  // the original givens.
+  const shownAfterRun = useRef<Grid | null>(null);
+
   const onCellChange = useCallback((i: number, v: number) => {
+    const shown = shownAfterRun.current;
     clearRun();
-    setPuzzle((g) => (g[i] === v ? g : g.map((x, k) => (k === i ? v : x))));
+    setPuzzle((g) => {
+      const base = shown ?? g;
+      return !shown && base[i] === v ? g : base.map((x, k) => (k === i ? v : x));
+    });
   }, []);
 
   const onRandom = () => {
     clearRun();
     setPuzzle(generatePuzzle(36));
+  };
+
+  const onClear = () => {
+    clearRun();
+    setPuzzle(EMPTY_GRID);
   };
 
   const onEvent = (ev: SolveEvent) => {
@@ -133,11 +147,7 @@ export default function App() {
   };
 
   const step = run?.steps[viewIndex] ?? null;
-  // Cells hinted up to the window on the board.
-  const hinted = useMemo(
-    () => new Set((run?.steps ?? []).slice(0, viewIndex + 1).flatMap((s) => (s.kick?.kind === "hint" ? s.kick.cells : []))),
-    [run?.steps, viewIndex],
-  );
+  shownAfterRun.current = run && !running && step ? step.grid : null;
   const prev = viewIndex > 0 ? run?.steps[viewIndex - 1] : null;
   const live: LiveBoard | null =
     run && step
@@ -148,14 +158,13 @@ export default function App() {
           validCols: step.valid_cols,
           validBoxes: step.valid_boxes,
           changed: new Set(step.grid.flatMap((d, i) => ((prev ? prev.grid[i] : run.puzzle[i]) !== d ? [i] : []))),
-          hinted,
         }
       : null;
   const lastMeta = run?.segments[run.segments.length - 1]?.meta ?? null;
 
   return (
     <main>
-      <h1>Sudoku Solver using SNN</h1>
+      <h1>Sudoku Solver using Spiking Neural Network</h1>
       <SudokuGrid
         puzzle={run ? run.puzzle : puzzle}
         editable={!running}
@@ -168,32 +177,23 @@ export default function App() {
         check={check}
         conflictMessages={run ? [] : conflicts.messages}
         error={error}
+        canClear={!!run || puzzle.some((v) => v)}
         onRandom={onRandom}
+        onClear={onClear}
         onStart={onStart}
       />
-      {run && !running && (
-        <p className="edit-hint">Type in any cell to edit the puzzle (this clears the results), or press Randomly Initialize.</p>
-      )}
       {run && (
         <LivePanel
           meta={lastMeta}
           steps={run.steps}
           status={run.status}
-          segment={Math.max(0, run.segments.length - 1)}
           viewIndex={viewIndex}
           onViewIndex={setViewIndex}
         />
       )}
       {run?.done && lastMeta && (
         <Suspense fallback={<p className="note">Loading the results…</p>}>
-          <AnalysisReport
-            puzzle={run.puzzle}
-            meta={lastMeta}
-            steps={run.steps}
-            done={run.done}
-            wallSeconds={run.wallSeconds}
-            segments={run.segments.length}
-          />
+          <AnalysisReport meta={lastMeta} steps={run.steps} done={run.done} wallSeconds={run.wallSeconds} />
         </Suspense>
       )}
     </main>

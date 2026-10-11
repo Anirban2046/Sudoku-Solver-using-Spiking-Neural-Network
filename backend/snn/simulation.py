@@ -1,6 +1,6 @@
 """Builds the NEST Sudoku network and runs it window by window.
 
-Only import this module on the NEST thread (see ``engine.py``).
+Runs inside a worker process (``worker.py``), one per simulation (see ``engine.py``).
 
 ``run`` is a generator of JSON-serialisable events (``meta``, ``step`` ...,
 ``done``). The network and the readout are those of ``sudoku_solver.py`` from
@@ -29,7 +29,6 @@ request (a rebuilt network with a new seed), so there is no overall time limit
 while every request stays within the host's function timeout.
 """
 
-import os
 import time
 from collections import deque
 
@@ -39,6 +38,7 @@ import numpy as np
 from . import sudoku_net
 from .analysis import cell_summary, count_violations, network_view
 from .control import kick_targets
+from .engine import available_cpus
 from .helpers import validate_solution
 from .sudoku_net import SudokuNet
 
@@ -46,21 +46,6 @@ KICK_I_E = -5.0  # bias current (nA scale, as neuron_params) that silences a pop
 RESETS_AFTER_FUTILE_KICKS = 4
 VM_INTERVAL_MS = 1.0  # membrane-potential sampling of one neuron per population
 RATE_WINDOW_MS = 1000  # span of the final firing-rate statistics
-
-
-def _threads():
-    """CPUs this process may actually use. cpu_count() reports the host's CPUs
-    in containers; the affinity mask and the cgroup CPU quota (e.g. 1 vCPU on
-    a serverless function) are both honoured."""
-    n = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
-    try:
-        with open("/sys/fs/cgroup/cpu.max") as f:
-            quota, period = f.read().split()[:2]
-        if quota != "max":
-            n = min(n, max(1, int(-(-int(quota) // int(period)))))
-    except (OSError, ValueError):
-        pass
-    return max(1, n)
 
 
 def _connections(net):
@@ -127,12 +112,13 @@ def run(
     max_sim_ms=None,
     patience=5,
     kick_ms=50,
+    threads=None,
 ):
     t_run = time.time()
     puzzle = np.asarray(puzzle, dtype=np.int64).reshape(9, 9)
     if seed is None:
         seed = int(np.random.default_rng().integers(1, 2**31 - 1))
-    threads = _threads()
+    threads = int(threads or available_cpus())
 
     nest.ResetKernel()
     nest.verbosity = nest.VerbosityLevel.ERROR

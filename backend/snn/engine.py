@@ -3,75 +3,138 @@
 ``run_simulation`` is a generator of JSON-serialisable event dicts (``meta``,
 ``step`` ..., then ``done`` or ``error``); see ``simulation.py`` for the loop.
 
-NEST (with OpenMP) segfaults when it is imported on one Python thread and
-driven from another, e.g. ResetKernel on a web worker thread after the module
-was imported elsewhere. So ``nest`` is never imported at module level: every
-NEST import and call happens on one long-lived thread owned by this module.
+NEST keeps one global kernel per process, so every simulation runs in its own
+short-lived worker process (``worker.py``). Several visitors can therefore
+solve at the same time on one server instance, each with an independent
+network. NEST is never imported in the web server process itself.
 """
 
-import queue
+import json
+import os
+import subprocess
+import sys
 import threading
-import traceback
-from concurrent.futures import ThreadPoolExecutor
 
-_nest_thread = ThreadPoolExecutor(max_workers=1, thread_name_prefix="nest")
-_END = object()
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_END_EVENTS = ("done", "error", "health")
 
-# Stop flag of the most recent run. When a client disconnects, its run may not be
-# closed promptly (that depends on the server's garbage collection), so a new run
-# or health check stops it explicitly instead of queueing behind it.
-_current_stop = threading.Event()
-_claim_lock = threading.Lock()
+_workers = set()  # running worker processes
+_workers_lock = threading.Lock()
 
 
-def claim_nest_thread():
-    """Ask any earlier run to stop after its current window; returns the new
-    run's stop flag. Callers must hold the API's run lock."""
-    global _current_stop
-    with _claim_lock:
-        _current_stop.set()
-        _current_stop = threading.Event()
-        return _current_stop
-
-
-def on_nest_thread(fn, *args, **kwargs):
-    """Run ``fn`` on the dedicated NEST thread and return its result."""
-    return _nest_thread.submit(fn, *args, **kwargs).result()
-
-
-def _safe_run(puzzle, options):
+def available_cpus():
+    """CPUs this process may actually use. cpu_count() reports the host's CPUs
+    in containers; the affinity mask and the cgroup CPU quota (e.g. 1 vCPU on
+    a serverless function) are both honoured."""
+    n = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
     try:
-        from .simulation import run
+        with open("/sys/fs/cgroup/cpu.max") as f:
+            quota, period = f.read().split()[:2]
+        if quota != "max":
+            n = min(n, max(1, -(-int(quota) // int(period))))
+    except (OSError, ValueError):
+        pass
+    return max(1, n)
 
-        yield from run(puzzle, **options)
-    except Exception as exc:  # noqa: BLE001 - reported to the client
-        traceback.print_exc()
-        yield {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+def _jsonable(obj):
+    if hasattr(obj, "tolist"):  # numpy arrays and scalars
+        return obj.tolist()
+    raise TypeError(f"not JSON serialisable: {type(obj).__name__}")
 
 
-def run_simulation(puzzle, **options):
+def _stop(proc):
+    """Stop a worker (if still running) and forget it. Workers hold no state
+    worth a graceful shutdown, so they are killed outright."""
+    if proc.poll() is None:
+        proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    with _workers_lock:
+        _workers.discard(proc)
+
+
+def _events(job, handle=None):
+    """Run one job in a worker process and yield its events. Closing the
+    generator, or calling ``cancel(handle)``, terminates the worker."""
+    env = dict(os.environ)
+    # the worker must find the same packages as this process
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    env["PYNEST_QUIET"] = "1"
+    # NEST's OpenMP threads spin while waiting by default, which starves the
+    # other simulations on the instance; passive waiting costs a lone run little.
+    env.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "snn.worker"],
+        cwd=_BACKEND_DIR,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    with _workers_lock:
+        _workers.add(proc)
+    if handle is not None:
+        handle["proc"] = proc
+    try:
+        proc.stdin.write(json.dumps(job, default=_jsonable))
+        proc.stdin.close()
+        finished = False
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            event = json.loads(line)
+            finished = event.get("type") in _END_EVENTS
+            yield event
+            if finished:
+                break
+        if not finished:
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            yield {"type": "error", "message": f"simulation worker exited unexpectedly (code {proc.returncode})"}
+    finally:
+        _stop(proc)
+
+
+def run_simulation(puzzle, handle=None, **options):
     """Generator of simulation events (see ``simulation.run`` for the options).
     Never raises: failures become one ``{"type": "error", "message": ...}`` event.
 
-    The simulation itself runs on the dedicated NEST thread; events are handed
-    over through a queue, so the caller may iterate from any thread. Closing the
-    generator early stops the simulation after the current window.
-    """
-    events = queue.Queue()
-    stop = claim_nest_thread()
-
-    def worker():
-        try:
-            for event in _safe_run(puzzle, options):
-                if stop.is_set():
-                    break
-                events.put(event)
-        finally:
-            events.put(_END)
-
-    _nest_thread.submit(worker)
+    Pass a dict as ``handle`` to be able to stop the run from another thread
+    with ``cancel(handle)``, e.g. when the client disconnects."""
+    if "threads" not in options:
+        # share the CPUs between the simulations running on this instance
+        with _workers_lock:
+            active = len(_workers) + 1
+        options["threads"] = max(1, available_cpus() // active)
     try:
-        while (event := events.get()) is not _END:
-            yield event
-    finally:
-        stop.set()
+        yield from _events({"mode": "run", "puzzle": puzzle, "options": options}, handle)
+    except Exception as exc:  # noqa: BLE001 - e.g. the worker could not be started
+        yield {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+
+def cancel(handle):
+    """Stop the worker of a run started with ``handle`` (no-op if not started or
+    done). Blocks briefly while the process exits, so call it off the event loop."""
+    proc = handle.get("proc") if handle else None
+    if proc is not None:
+        _stop(proc)
+
+
+def health():
+    """Run a tiny NEST simulation in a worker; returns its ``health`` event."""
+    events = list(_events({"mode": "health"}))
+    return events[-1] if events else {"type": "error", "message": "no response from worker"}
+
+
+def stop_all():
+    """Terminate every running worker (used on server shutdown)."""
+    with _workers_lock:
+        procs = list(_workers)
+    for proc in procs:
+        _stop(proc)

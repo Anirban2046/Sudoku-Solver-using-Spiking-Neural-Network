@@ -60,27 +60,47 @@ def test_unverifiable_422(client, monkeypatch):
     assert "couldn't confirm" in r.text
 
 
+def _take_all_slots():
+    for _ in range(main.MAX_CONCURRENT_RUNS):
+        assert main._run_slots.acquire(blocking=False)
+
+
+def _free_all_slots():
+    for _ in range(main.MAX_CONCURRENT_RUNS):
+        main._run_slots.release()
+
+
+def _free_slots():
+    """Number of runs that could start right now."""
+    n = 0
+    while main._run_slots.acquire(blocking=False):
+        n += 1
+    for _ in range(n):
+        main._run_slots.release()
+    return n
+
+
 def test_health_busy_answers_at_once(client):
     import time
 
-    assert main._run_lock.acquire(blocking=False)
+    _take_all_slots()
     try:
         t = time.time()
         body = client.get("/api/health").json()
         assert body["busy"] is True and body["nest"] == "3.10.0"
         assert time.time() - t < 2
     finally:
-        main._run_lock.release()
+        _free_all_slots()
 
 
-def test_busy_429(client):
-    assert main._run_lock.acquire(blocking=False)
+def test_busy_429_only_when_every_slot_is_taken(client):
+    _take_all_slots()
     try:
         r = client.post("/api/solve", json={"puzzle": get_puzzle(4).tolist()})
         assert r.status_code == 429
         assert r.json() == {"detail": "busy"}
     finally:
-        main._run_lock.release()
+        _free_all_slots()
 
 
 def test_stream(client, monkeypatch):
@@ -96,4 +116,24 @@ def test_stream(client, monkeypatch):
     assert events[0]["segment"] == 1 and events[1]["t_start_ms"] == 1000
     assert events[-1]["type"] == "done"
     assert events[-1]["solved"] or events[-1]["resume"]
-    assert not main._run_lock.locked()  # released after the stream
+    assert _free_slots() == main.MAX_CONCURRENT_RUNS  # the slot was given back
+
+
+def test_concurrent_solves(client, monkeypatch):
+    """Several visitors solve at the same time, each with its own network."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setenv("WALL_BUDGET_S", "10")
+    puzzles = [generate_puzzle(36, np.random.default_rng(s)).tolist() for s in (3, 4)]
+
+    def solve(i):
+        with client.stream("POST", "/api/solve", json={"puzzle": puzzles[i], "seed": 10 + i}) as r:
+            assert r.status_code == 200
+            return [json.loads(line) for line in r.iter_lines() if line]
+
+    with ThreadPoolExecutor(2) as pool:
+        runs = list(pool.map(solve, range(2)))
+    for i, events in enumerate(runs):
+        assert events[0]["type"] == "meta" and events[0]["seed"] == 10 + i
+        assert events[-1]["type"] == "done"
+    assert _free_slots() == main.MAX_CONCURRENT_RUNS

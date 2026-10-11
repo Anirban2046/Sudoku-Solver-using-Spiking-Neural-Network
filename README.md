@@ -93,6 +93,7 @@ evolved.
 |---|---|
 | Keeps searching | A convergence controller (§3.6) intervenes when the network stalls, and the run continues until the puzzle is solved |
 | No overall time limit | Long runs are split into consecutive requests that each stay within the hosting time limit (§3.7) |
+| Concurrent visitors | Several visitors can solve at the same time; each simulation runs in its own process with its own network |
 | Fault tolerance | Dropped connections, server errors and busy servers are retried automatically, and the run resumes from the last window |
 | Input safety | The server re-validates every puzzle and rejects any it cannot confirm to be solvable |
 
@@ -245,8 +246,8 @@ continuous run.
 │  └───────────────────────┘   └─────────────┬────────────┘    │
 │                                            ▼                 │
 │                              ┌──────────────────────────┐    │
-│                              │ Engine (engine.py)       │    │
-│                              │ dedicated NEST thread    │    │
+│                              │ Engine (engine.py):      │    │
+│                              │ worker process per run   │    │
 │                              └─────────────┬────────────┘    │
 │                                            ▼                 │
 │                              ┌──────────────────────────┐    │
@@ -265,8 +266,9 @@ continuous run.
 | Component | Responsibility |
 |---|---|
 | **Frontend** (`frontend/`) | Puzzle input and validation, puzzle generation, streaming client, live board and charts, network analysis views |
-| **API** (`backend/main.py`) | Request validation, a per-instance lock (one simulation at a time), NDJSON streaming |
-| **Engine** (`backend/snn/engine.py`) | Runs every NEST call on one long-lived thread and passes events to the request through a queue. NEST crashes if it is imported on one thread and driven from another |
+| **API** (`backend/main.py`) | Request validation, a limit on simultaneous simulations per instance, NDJSON streaming |
+| **Engine** (`backend/snn/engine.py`) | Starts one worker process per simulation and relays its events. NEST keeps one global kernel per process, so separate processes let several visitors solve at once. A worker is stopped as soon as its client disconnects |
+| **Worker** (`backend/snn/worker.py`) | Runs one simulation with its own NEST kernel and writes its events to the engine |
 | **Simulation** (`backend/snn/simulation.py`) | Builds the network, runs the 100 ms windows, reads out the board, applies the convergence controller, records spikes and membrane potentials |
 | **Controller logic** (`backend/snn/control.py`) | Chooses which populations a kick silences (no NEST dependency) |
 | **Analysis** (`backend/snn/analysis.py`) | Conflict counting, per-cell decision margins, final network view (spikes, membrane potentials, firing-rate statistics) |
@@ -310,10 +312,10 @@ The page is a single screen, top to bottom:
 Runs a 10-neuron NEST smoke test. Useful for warming up a cold instance.
 
 ```json
-{ "nest": "3.10.0", "cpus": 2, "spikes": 60, "seconds": 0.56 }
+{ "nest": "3.10.0", "cpus": 2, "max_concurrent_runs": 3, "spikes": 60, "seconds": 0.56 }
 ```
 
-While a simulation is running, it returns `{"nest": "3.10.0", "cpus": 2, "busy": true}` immediately.
+When every simulation slot is in use, it returns immediately with `"busy": true` instead of running the test.
 
 ### `POST /api/solve`
 
@@ -341,7 +343,7 @@ While a simulation is running, it returns `{"nest": "3.10.0", "cpus": 2, "busy":
 |---|---|
 | `200` | Stream started |
 | `422` | Invalid puzzle: wrong shape, values out of range, duplicates, fewer than 17 givens, no solution, or solvability could not be confirmed |
-| `429` | This instance is already running a simulation; the browser waits and retries for up to 3 minutes |
+| `429` | Every simulation slot on this instance is in use (`MAX_CONCURRENT_RUNS`); the browser waits and retries for up to 3 minutes |
 
 ---
 
@@ -403,7 +405,8 @@ searched, but they can take many minutes.
 │   │   ├── sudoku_net.py    NEST network definition (from the NEST example)
 │   │   ├── simulation.py    Network build, 100 ms run loop, convergence controller
 │   │   ├── control.py       Kick-target selection
-│   │   ├── engine.py        Dedicated NEST thread and event queue
+│   │   ├── engine.py        One worker process per simulation, cleanup on disconnect
+│   │   ├── worker.py        Runs one simulation in its own process
 │   │   ├── analysis.py      Conflicts, decision margins, final network view
 │   │   ├── helpers.py       Validation, classical solver, puzzle generator
 │   │   └── encoding.py      Base64 packing of numeric arrays
@@ -468,6 +471,7 @@ All settings are optional environment variables of the backend.
 |---|---|---|
 | `WALL_BUDGET_S` | `240` | Wall-clock seconds one request may simulate before the browser continues with a new request (10–280) |
 | `NOISE_RATE` | `350` | Background Poisson rate in Hz |
+| `MAX_CONCURRENT_RUNS` | `3` | Simulations that may run at once on one server instance (1–16); each uses about 300 MB |
 | `CORS_ORIGINS` | – | Comma-separated origins allowed to call a separately hosted backend |
 
 Frontend build variable:
@@ -510,7 +514,7 @@ with `CORS_ORIGINS`.
 ## 13. Testing and quality
 
 ```bash
-cd backend  && python -m pytest -q   # 31 tests
+cd backend  && python -m pytest -q   # 34 tests
 cd frontend && npm test              # 23 tests
 ```
 
@@ -519,7 +523,7 @@ cd frontend && npm test              # 23 tests
 | Sudoku logic | Conflict detection, solution counting, unique-puzzle generation, Start-button rules |
 | Network | Connection counts (521,235), event order, payload sizes, recorded spikes and membrane potentials, solution validity |
 | Controller | Kick and restart triggering, protection of given cells |
-| API | Validation errors, busy handling, streaming, health check while busy |
+| API and concurrency | Validation errors, simultaneous solves, the concurrency limit, streaming, health check while busy, worker shutdown when a client disconnects |
 | Frontend behaviour | Grid editing and clearing, continuation across requests, retries after errors, busy waiting |
 
 GitHub Actions runs both suites, and the frontend production build, on every
@@ -532,9 +536,11 @@ push.
 * **Stochastic run time.** Easy puzzles usually finish within seconds of
   simulated time. There is no upper bound: the hardest puzzles can take many
   minutes of wall time.
-* **One simulation per instance.** NEST keeps a single global kernel, so each
-  server instance runs one simulation at a time. Concurrent visitors may wait
-  briefly.
+* **Shared CPU between simultaneous runs.** Up to `MAX_CONCURRENT_RUNS`
+  (default 3) simulations run at once on one server instance, each in its own
+  process of about 300 MB. They share the instance's CPUs, so simultaneous runs
+  progress more slowly. Beyond the limit, further visitors wait briefly or are
+  served by another instance.
 * **Hosting quotas.** The free Vercel plan includes 4 active-CPU hours per
   month; a typical solve uses 10–60 CPU-seconds.
 

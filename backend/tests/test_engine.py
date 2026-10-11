@@ -108,3 +108,32 @@ def test_kicks_leave_given_cells_alone():
     assert targets[0] == grid[0, 0]  # the wrong digit on the given cell is silenced
     assert 9 not in targets  # a correct given cell is never silenced
     assert 3 in targets  # the free cell in the conflict is
+
+
+def test_closing_the_stream_stops_the_worker():
+    from snn import engine
+
+    events = run_simulation(get_puzzle(6), seed=3, max_sim_ms=60_000)
+    assert next(events)["type"] == "meta"
+    with engine._workers_lock:
+        procs = list(engine._workers)
+    assert len(procs) == 1 and procs[0].poll() is None
+    events.close()  # e.g. the client disconnected
+    assert procs[0].poll() is not None
+    assert not engine._workers
+
+
+def test_threads_shared_between_runs():
+    from snn import engine
+
+    first = run_simulation(get_puzzle(6), seed=1, max_sim_ms=60_000)
+    second = run_simulation(get_puzzle(6), seed=2, max_sim_ms=60_000)
+    try:
+        t1 = next(first)["threads"]
+        t2 = next(second)["threads"]
+        cpus = engine.available_cpus()
+        assert t1 == cpus and t2 == max(1, cpus // 2)
+    finally:
+        first.close()
+        second.close()
+

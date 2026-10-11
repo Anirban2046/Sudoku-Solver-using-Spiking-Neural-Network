@@ -6,19 +6,20 @@ import threading
 import weakref
 from contextlib import asynccontextmanager
 
+import anyio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import iterate_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
 @asynccontextmanager
 async def lifespan(_app):
     yield
-    # On shutdown, stop a running simulation after its current window instead of
-    # waiting for its whole time budget.
-    from snn.engine import claim_nest_thread
+    # On shutdown, stop running simulations instead of waiting for their budgets.
+    from snn.engine import stop_all
 
-    claim_nest_thread()
+    stop_all()
 
 
 app = FastAPI(title="Sudoku Solver using Spiking Neural Network", lifespan=lifespan)
@@ -27,8 +28,6 @@ _cors = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.s
 if _cors:
     app.add_middleware(CORSMiddleware, allow_origins=_cors, allow_methods=["GET", "POST"], allow_headers=["*"])
 
-# The NEST kernel is global to the process, so only one simulation runs at a time.
-_run_lock = threading.Lock()
 
 
 def _env_float(name, default, lo, hi):
@@ -37,6 +36,12 @@ def _env_float(name, default, lo, hi):
     except ValueError:
         value = default
     return min(max(value, lo), hi)
+
+
+# Each simulation runs in its own worker process with its own NEST kernel
+# (about 300 MB); this caps how many run at once on one server instance.
+MAX_CONCURRENT_RUNS = int(_env_float("MAX_CONCURRENT_RUNS", 3, 1, 16))
+_run_slots = threading.BoundedSemaphore(MAX_CONCURRENT_RUNS)
 
 
 def settings():
@@ -103,30 +108,21 @@ def health():
     import time
     from importlib.metadata import version
 
-    from snn.engine import claim_nest_thread, on_nest_thread
-
-    def tiny_sim():
-        import nest
-
-        nest.ResetKernel()
-        nest.verbosity = nest.VerbosityLevel.ERROR
-        n = nest.Create("iaf_psc_exp", 10, {"I_e": 500.0})
-        sr = nest.Create("spike_recorder")
-        nest.Connect(n, sr)
-        nest.Simulate(100.0)
-        return nest.__version__, sr.n_events
+    from snn.engine import available_cpus
+    from snn.engine import health as run_health_check
 
     t = time.time()
-    # Don't touch the kernel under a running solve; just report that it's busy
-    # (the installed version is read without importing NEST on this thread).
-    if not _run_lock.acquire(blocking=False):
-        return {"nest": version("nest-simulator"), "cpus": os.cpu_count(), "busy": True}
+    base = {"cpus": available_cpus(), "max_concurrent_runs": MAX_CONCURRENT_RUNS}
+    # When every slot is taken, report that without starting another worker.
+    if not _run_slots.acquire(blocking=False):
+        return {"nest": version("nest-simulator"), **base, "busy": True}
     try:
-        claim_nest_thread()  # stop a run whose client has gone away
-        nest_version, spikes = on_nest_thread(tiny_sim)
+        result = run_health_check()
     finally:
-        _run_lock.release()
-    return {"nest": nest_version, "cpus": os.cpu_count(), "spikes": spikes, "seconds": round(time.time() - t, 3)}
+        _run_slots.release()
+    if result.get("type") != "health":
+        raise HTTPException(status_code=500, detail=result.get("message", "health check failed"))
+    return {"nest": result["nest"], **base, "spikes": result["spikes"], "seconds": round(time.time() - t, 3)}
 
 
 def _release_once():
@@ -134,37 +130,52 @@ def _release_once():
 
     def release():
         if done.acquire(blocking=False):
-            _run_lock.release()
+            _run_slots.release()
 
     return release
 
 
-def _ndjson(req, cfg, release):
-    try:
-        from snn.engine import run_simulation
+def _ndjson(req, cfg, handle):
+    from snn.engine import run_simulation
 
-        options = dict(cfg, seed=req.seed, t_offset_ms=req.t_offset_ms, segment=req.segment)
-        for event in run_simulation(req.puzzle, **options):
-            yield json.dumps(event, separators=(",", ":")) + "\n"
+    options = dict(cfg, seed=req.seed, t_offset_ms=req.t_offset_ms, segment=req.segment)
+    for event in run_simulation(req.puzzle, handle=handle, **options):
+        yield json.dumps(event, separators=(",", ":")) + "\n"
+
+
+async def _stream(req, cfg, release):
+    """Relay the run's events. When the client disconnects, the server cancels
+    this coroutine; the ``finally`` then stops the run's worker at once (closing
+    the underlying generator is not guaranteed to happen promptly)."""
+    from snn.engine import cancel
+
+    handle = {}
+    try:
+        async for line in iterate_in_threadpool(_ndjson(req, cfg, handle)):
+            yield line
     finally:
+        # Stop the worker on a thread (never block the event loop), even though
+        # this coroutine is being cancelled.
+        with anyio.CancelScope(shield=True):
+            await anyio.to_thread.run_sync(cancel, handle)
         release()
 
 
 @app.post("/api/solve")
 def solve(req: SolveRequest):
-    if not _run_lock.acquire(blocking=False):
+    if not _run_slots.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="busy")
     release = _release_once()
     try:
-        gen = _ndjson(req, settings(), release)
-        # If the client goes away before the stream starts, the generator body
-        # never runs; the finalizer still frees the lock.
-        weakref.finalize(gen, release)
+        stream = _stream(req, settings(), release)
+        # If the client goes away before the stream starts, its body never
+        # runs (and no worker is started); the finalizer still frees the slot.
+        weakref.finalize(stream, release)
     except BaseException:
         release()
         raise
     return StreamingResponse(
-        gen,
+        stream,
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

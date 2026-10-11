@@ -172,7 +172,15 @@ this app has replaced the fixed time limit with the kick/restart/hint
 controller and continuation requests, removed the spike raster, and reduced the report to the
 views described above.
 
-## Licence
+## Credits and licence
 
-GPL-2.0-or-later. See [LICENSE](LICENSE) and [NOTICE](NOTICE). The network and
-the ported helpers are © The NEST Initiative.
+The network (`backend/snn/sudoku_net.py`) and the validation helpers ported
+into `backend/snn/helpers.py` come from the
+[NEST Simulator](https://www.nest-simulator.org/) Sudoku example, by J. Gille,
+S. Furber and A. Rowley, © 2004 The NEST Initiative. The network was first
+designed by Steve Furber and Andrew Rowley (University of Manchester) for
+[SpiNNaker](https://github.com/SpiNNakerManchester/IntroLab/tree/master/sudoku).
+
+That code is licensed under the GNU General Public License, version 2 or (at
+your option) any later version, and so is the rest of this project. See
+[LICENSE](LICENSE).

@@ -1,0 +1,21 @@
+Sudoku Solver using SNN
+=======================
+
+This application runs the spiking-neural-network Sudoku solver from the NEST
+Simulator examples (pynest/examples/sudoku) and wraps it in a web interface.
+
+The network (backend/snn/sudoku_net.py) and the validation helpers ported into
+backend/snn/helpers.py are part of NEST:
+
+    Copyright (C) 2004 The NEST Initiative
+    Authors: J. Gille, S. Furber, A. Rowley
+
+and are distributed under the GNU General Public License, version 2 or (at
+your option) any later version. The original network was designed by Steve
+Furber and Andrew Rowley (University of Manchester) for SpiNNaker:
+https://github.com/SpiNNakerManchester/IntroLab/tree/master/sudoku
+
+NEST Simulator: https://www.nest-simulator.org/
+
+The rest of this project is distributed under the same licence
+(GPL-2.0-or-later); see LICENSE.

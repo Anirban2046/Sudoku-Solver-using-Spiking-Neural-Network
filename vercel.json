@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "web": { "root": "frontend/", "framework": "vite" },
+    "api": {
+      "root": "backend/",
+      "entrypoint": "main:app",
+      "functions": { "main.py": { "maxDuration": 300, "memory": 2048 } }
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "api" } },
+    { "source": "/(.*)",     "destination": { "service": "web" } }
+  ]
+}

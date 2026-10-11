@@ -112,6 +112,16 @@ The network model is the NEST example `pynest/examples/sudoku`
 (J. Gille, S. Furber, A. Rowley), based on an earlier SpiNNaker
 implementation. It is used unchanged apart from one upstream bug fix (§3.8).
 
+In short, Sudoku is a **constraint-satisfaction problem**. The network turns
+every possible decision ("cell (r, c) holds digit d") into a small group of
+spiking neurons, and every rule into inhibition between groups whose decisions
+would clash. Each neuron is intrinsically active and receives random input, so
+the network keeps "trying out" assignments. Assignments that break a rule
+weaken themselves, while a complete solution is self-sustaining. The sections
+below describe the model (§3.1–§3.5), the controller added in this project
+(§3.6–§3.7), the theory behind the convergence (§3.9), the numerical details
+(§3.10) and background literature (§3.11).
+
 ### 3.1 Encoding
 
 Each of the 81 cells has one **population** of 5 neurons for each digit 1–9:
@@ -122,7 +132,18 @@ Each of the 81 cells has one **population** of 5 neurons for each digit 1–9:
 population index = row × 81 + column × 9 + (digit − 1)
 ```
 
-An active population means "this cell holds this digit".
+An active population means "this cell holds this digit". Formally, each
+population stands for a binary variable $x_{r,c,d}$, which is 1 when cell
+$(r, c)$ holds digit $d$. A valid solution satisfies four families of
+constraints (an *exact cover* with 4 × 81 = 324 constraints):
+
+$$\sum_{d=1}^{9} x_{r,c,d} = 1 \quad \text{(one digit per cell)}$$
+
+$$\sum_{c=1}^{9} x_{r,c,d} = 1, \qquad \sum_{r=1}^{9} x_{r,c,d} = 1, \qquad \sum_{(r,c) \in b} x_{r,c,d} = 1 \quad \text{(each digit once per row, column and box)}$$
+
+Using 5 neurons per population, rather than one, makes each decision robust:
+a population's spike count averages over five noisy neurons, and no single
+neuron can flip a decision on its own.
 
 ### 3.2 Neuron model
 
@@ -132,7 +153,9 @@ exponentially decaying synaptic currents (NEST model `iaf_psc_exp`):
 $$\frac{dV}{dt} = -\frac{V - E_L}{\tau_m} + \frac{I_{syn}(t) + I_e}{C_m}, \qquad \frac{dI_{syn}}{dt} = -\frac{I_{syn}}{\tau_{syn}}$$
 
 When $V$ reaches $V_{th}$, the neuron emits a spike, is reset to $V_{reset}$
-and stays refractory for $t_{ref}$.
+and stays refractory for $t_{ref}$. Each incoming spike of weight $w$ makes
+$I_{syn}$ jump by $w$; excitatory and inhibitory currents decay separately,
+both with $\tau_{syn}$.
 
 | Parameter | Symbol | Value |
 |---|---|---|
@@ -146,6 +169,43 @@ and stays refractory for $t_{ref}$.
 | Firing threshold | $V_{th}$ | −50 mV |
 | Initial potential | $V_m(0)$ | uniform in [−65, −55] mV |
 
+The parameters come from the original PyNN model (nF, nA). NEST reads them
+as pF and pA, but only the ratios $I/C_m$ and $w/C_m$ enter the voltage
+equation, so the dynamics in millivolts and milliseconds are identical.
+
+**Intrinsic activity.** For a constant input current $I$, the membrane
+potential relaxes towards
+
+$$V_\infty(I) = E_L + \frac{\tau_m I}{C_m}$$
+
+With the bias current alone, $V_\infty = -65 + 20 \cdot 0.5 / 0.25 = -25$ mV,
+far above the threshold. Every neuron is therefore **intrinsically active**:
+without any input it would fire regularly. The interspike interval and firing
+rate for a constant current above threshold are
+
+$$T(I) = \tau_m \ln\frac{V_\infty(I) - V_{reset}}{V_\infty(I) - V_{th}}, \qquad f(I) = \frac{1}{t_{ref} + T(I)}$$
+
+For the bias alone this gives $T = 20 \ln(45/25) = 11.76$ ms and
+$f = 72.7$ Hz. The refractory period caps the rate at $1/t_{ref} = 500$ Hz.
+
+**Postsynaptic potentials.** A single spike of weight $w$ arriving at rest
+changes the membrane potential by
+
+$$\Delta V(t) = \frac{w}{C_m} \cdot \frac{\tau_m \tau_{syn}}{\tau_m - \tau_{syn}} \left( e^{-t/\tau_m} - e^{-t/\tau_{syn}} \right)$$
+
+which peaks at $t_{peak} = \frac{\tau_m \tau_{syn}}{\tau_m - \tau_{syn}} \ln\frac{\tau_m}{\tau_{syn}} = 9.24$ ms:
+
+| Input | Weight $w$ | Peak $\Delta V$ |
+|---|---:|---:|
+| Inhibition from one neuron | −0.2 | −2.52 mV |
+| One stimulus spike (givens) | 1.3 | +16.38 mV |
+| One noise spike | 1.6 | +20.16 mV |
+
+**No reversal potentials.** Synapses inject currents rather than changing
+conductances, so strong inhibition can drive $V$ far below $E_L$. The
+membrane-potential plot of the application shows runner-up neurons dropping
+below −150 mV when many winning populations inhibit them at once.
+
 ### 3.3 Connectivity: the rules as inhibition
 
 Every population inhibits the 28 populations it conflicts with:
@@ -156,6 +216,22 @@ Every population inhibits the 28 populations it conflicts with:
 * the other 8 digits of its **own cell**.
 
 Each neuron therefore inhibits 28 × 5 = 140 neurons.
+
+Formally, the populations are the nodes of a **conflict graph**: two nodes
+$(r, c, d)$ and $(r', c', d')$ are connected when they are the same cell with
+different digits, or the same digit in two cells that share a row, column or
+box. Every node has exactly 28 neighbours (8 + 8 + 4 + 8). Each connected
+pair of populations is wired all-to-all in both directions, which gives
+729 × 28 = 20,412 directed population pairs × 5 × 5 neurons = 510,300
+inhibitory synapses.
+
+Two inhibitory motifs result:
+
+* **One winner per cell.** The 9 populations of a cell inhibit each other
+  mutually, forming a *winner-take-all* circuit that settles on one digit.
+* **One occurrence per unit.** The populations of the same digit in a row,
+  column or box also inhibit each other, so a digit that wins in one cell
+  suppresses the same digit in all 20 peer cells.
 
 | Connection type | Count | Weight |
 |---|---:|---:|
@@ -175,6 +251,23 @@ All synapses are static, with a delay of 1 ms.
   weight is 0 except for the populations of the given digits (1.3). The
   extra drive makes a given digit win its cell.
 
+A Poisson spike train of rate $\nu$ through synapses of weight $w$ produces a
+fluctuating current whose mean and variance follow from Campbell's theorem:
+
+$$\mu_I = w \tau_{syn} \nu, \qquad \sigma_I^2 = \frac{w^2 \nu \tau_{syn}}{2}$$
+
+| Source | Rate $\nu$ | Mean current $\mu_I$ | Fluctuation $\sigma_I$ |
+|---|---:|---:|---:|
+| Background noise (all neurons) | 350 Hz | 2.80 | 1.50 |
+| Stimulus (given digits only) | 200 Hz | 1.30 | 0.92 |
+
+The noise fluctuations are of the same order as the margins that decide
+between digits (§3.9), so neurons near threshold fire at random moments.
+This randomness acts like a *temperature*: it lets the network leave
+unfavourable states instead of freezing in the first one it reaches. The
+extra mean current of a given digit (+1.30, about 40 % more drive than the
+noise provides) biases its population to win.
+
 ### 3.5 Readout and performance
 
 The simulation runs in windows of 100 ms. After each window the spikes of
@@ -193,6 +286,24 @@ where $R$, $C$ and $B$ are the numbers of valid rows, columns and boxes.
 A puzzle is **solved** when all 27 units are valid and every given digit is
 kept.
 
+Once the network has settled, the readout is unambiguous. A winning
+population fires at about 240 Hz, i.e. about 5 × 240 × 0.1 ≈ 120 spikes per
+window, while a suppressed population fires at about 6 Hz, i.e. about 3
+spikes. The clarity of a decision is measured by the **decision margin**
+
+$$m_{r,c} = \frac{N_{top} - N_{second}}{N_{top}}$$
+
+shown in the "One cell, up close" view.
+
+The number of rule violations serves as an **energy** of the read-out board:
+
+$$E = \sum_{(i,j) \in P} [\hat{d}_i = \hat{d}_j]$$
+
+where $P$ is the set of 810 unordered cell pairs that share a row, column or
+box, and $[\cdot]$ is 1 if the condition holds and 0 otherwise. $E = 0$
+exactly for a valid grid. The convergence controller (§3.6) monitors this
+quantity.
+
 ### 3.6 Convergence controller
 
 The network is stochastic. It can stall with a few conflicts for a long time,
@@ -205,6 +316,27 @@ in two steps:
 |---|---|---|
 | **Kick** | No improvement in conflicts for 5 windows (0.5 s) | The winning populations of the conflicting cells are silenced for 50 ms with a strong negative bias current, letting a rival digit take over. If a kick does not help, the next one silences every free cell sharing a row, column or box with a conflict |
 | **Restart** | 4 kicks in a row without improvement | All membrane potentials are re-randomised, restarting the search while keeping the givens' input |
+
+**Stall detection.** After window $k$, the controller computes
+$b_k = E_k + G_k$, the number of conflicting cell pairs plus the number of
+overridden givens. It counts the windows since $b$ last reached a new
+minimum; when that count reaches 5, the network is considered stuck.
+
+**Kick.** For 50 ms, the bias current of the selected populations is set to
+$I_e = -5$. Their total mean input becomes about $-5 + 2.8 = -2.2$, so
+$V_\infty \approx -241$ mV and they fall silent. The inhibition they exerted
+on their rivals decays with $\tau_{syn} = 5$ ms, which releases the other
+digits of the same cells and the same digit in peer cells, and a rival can
+take over. Afterwards the bias returns to normal and the potential recovers
+with $\tau_m = 20$ ms. A kick is the spiking analogue of a "flip" in
+stochastic local search; if one does not help, the next silences the whole
+neighbourhood of the conflict, so that region re-solves against the rest of
+the board.
+
+**Restart.** All membrane potentials are redrawn uniformly from
+[−65, −55] mV (`SudokuNet.reset_V_m`). Synaptic currents die out within a few
+$\tau_{syn}$, so the network re-enters a fresh transient from a new random
+state, as in random-restart search. The givens' input is kept.
 
 Both steps only perturb the network's activity; every digit is still decided
 by the spiking dynamics. Together with continuation requests (§3.7), the
@@ -224,6 +356,119 @@ continuous run.
   `uniform(-65, -55)`.
 * The upstream plotting code framed invalid boxes at `(3j, 3j)`; the browser
   draws the frame at the correct position `(row 3i, column 3j)`.
+
+### 3.9 Why the dynamics solve the puzzle
+
+A mean-field argument shows why solutions are stable and why conflicting
+states are not. It replaces each input by its mean current (§3.4) and each
+population by its firing rate $r_j$.
+
+**Input to a neuron.** A neuron in population $i$ receives
+
+$$I_i = I_e + \mu_{noise} + g_i \mu_{stim} + 5 w_{inh} \tau_{syn} \sum_{j \in \mathcal{N}(i)} r_j$$
+
+where $g_i = 1$ for a given digit and 0 otherwise, $w_{inh} = -0.2$,
+$\mathcal{N}(i)$ is the set of its 28 conflicting populations, and the
+factor 5 counts the neurons per population. The neuron fires when
+$V_\infty(I_i) > V_{th}$, i.e. when
+
+$$I_i > I_\theta = \frac{C_m (V_{th} - E_L)}{\tau_m} = 0.1875$$
+
+**Effect of one winner.** A winning population fires at about 240 Hz, so it
+contributes $5 \cdot (-0.2) \cdot 0.005 \cdot 240 \approx -1.2$ to each
+population it inhibits. Suppressed populations fire so rarely that their
+contribution is negligible. If $k$ of a population's neighbours are winners:
+
+| Winning neighbours $k$ | Input, free digit | | Input, given digit | |
+|---:|---:|---|---:|---|
+| 0 | +3.30 | fires | +4.60 | fires |
+| 1 | +2.10 | fires | +3.40 | fires |
+| 2 | +0.90 | fires | +2.20 | fires |
+| 3 | −0.30 | **silent** | +1.00 | fires |
+| 4 | −1.50 | **silent** | −0.20 | **silent** |
+
+A free digit is silenced by **3 or more** winning neighbours, a given digit
+only by **4 or more**.
+
+**Valid solutions are self-sustaining.** In a valid grid:
+
+* every winning population has $k = 0$, because no other winner shares its
+  cell or its digit in a peer cell. Its input of 3.30 gives a mean-field rate
+  of $f(3.3) \approx 282$ Hz (measured: 220–270 Hz);
+* every losing population (digit $d$ in a cell that holds another digit) is
+  inhibited by its own cell's winner, plus the cells in its row, column and
+  box that hold $d$. These are 2 or 3 distinct cells, so $k$ is 3 or 4 and the
+  population is silenced. Across 30 solved grids, all losing populations had
+  exactly 3 or 4 winning neighbours.
+
+So the winners keep every loser silent, and the silent losers leave the
+winners undisturbed: a valid solution is a **self-consistent fixed point**
+(an attractor) of the dynamics.
+
+**Conflicting states are unstable.** If two cells in a unit show the same
+digit, their winning populations inhibit each other ($k \geq 1$). Their
+drive and firing rates fall, which weakens the inhibition they exert on the
+rival digits of their own cells. At the same time, some losing populations
+have fewer than 3 winning neighbours and remain above threshold. Such states
+are not self-consistent, and the noise (σ ≈ 1.5, comparable to the input margins in the table above)
+soon tips a rival into winning. Each such move tends to reduce the number of
+conflicts, so the energy $E$ of §3.5 drifts towards 0.
+
+**Why givens can be overridden.** A given digit is silenced only by 4 or more
+winning neighbours. This is rare but possible: a complete valid grid that
+disagrees with a given can surround the given's population with 4 winners and
+remain stable. These are the "valid grid that overrides a given" attractors
+of §3.6, which the controller breaks with a kick on the overridden cell.
+
+**Search as stochastic sampling.** Taken together, the network performs a
+noisy descent on the conflict energy: states with fewer conflicts are more
+stable and persist longer, while noise allows occasional moves to worse
+states and so escapes local minima. This is closely related to Hopfield
+networks for optimisation and to the interpretation of noisy spiking networks
+as sampling from a Boltzmann-like distribution that concentrates on
+low-energy states (§3.11). In that picture the solution, with $E = 0$, is the
+most stable state the network can occupy.
+
+### 3.10 Numerical simulation details
+
+| Aspect | Setting |
+|---|---|
+| Simulator | NEST 3.10.0 |
+| Time step | 0.1 ms (NEST default resolution) |
+| Integration | Exact integration of the linear subthreshold dynamics of `iaf_psc_exp` |
+| Synaptic delay | 1 ms for all synapses |
+| Noise generator | One `poisson_generator` connected to all neurons; NEST sends each target an independent spike train |
+| Stimulus generators | One `poisson_generator` per population (729) |
+| Spike recording | One `spike_recorder` per population, cleared after every 100 ms window |
+| Membrane recording | One `multimeter` sampling $V_m$ of the first neuron of every population every 1 ms |
+| Simulation loop | Repeated `Simulate(100 ms)` calls; the network state carries over, so the readout samples one continuous trajectory |
+| Random seeds | One seed per request, used for NEST's random numbers and the readout's tie-breaking |
+| Parallelism | OpenMP threads per simulation = available CPUs ÷ simultaneous runs |
+
+A typical 100 ms window contains about 11,700 spikes. Each spike is delivered
+to 140 inhibitory targets, so one window processes roughly 1.6 million
+synaptic events.
+
+### 3.11 Background and references
+
+* The network: NEST Simulator example `pynest/examples/sudoku`, by
+  J. Gille, S. Furber and A. Rowley, based on the SpiNNaker
+  [IntroLab Sudoku](https://github.com/SpiNNakerManchester/IntroLab/tree/master/sudoku)
+  by S. Furber and A. Rowley.
+* J. J. Hopfield and D. W. Tank (1985). "Neural" computation of decisions in
+  optimization problems. *Biological Cybernetics*, 52, 141–152.
+* L. Buesing, J. Bill, B. Nessler and W. Maass (2011). Neural dynamics as
+  sampling: a model for stochastic computation in recurrent networks of
+  spiking neurons. *PLoS Computational Biology*, 7(11), e1002211.
+* Z. Jonke, S. Habenschuss and W. Maass (2016). Solving constraint
+  satisfaction problems with networks of spiking neurons. *Frontiers in
+  Neuroscience*, 10, 118.
+* G. A. Fonseca Guerra and S. B. Furber (2017). Using stochastic spiking
+  neural networks on SpiNNaker to solve constraint satisfaction problems.
+  *Frontiers in Neuroscience*, 11, 714.
+* S. Rotter and M. Diesmann (1999). Exact digital simulation of time-invariant
+  linear systems with applications to neuronal modeling. *Biological
+  Cybernetics*, 81, 381–402.
 
 ---
 

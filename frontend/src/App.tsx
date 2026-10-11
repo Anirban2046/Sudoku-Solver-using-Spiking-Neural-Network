@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import Controls from "./components/Controls";
 import LivePanel, { type RunStatus } from "./components/LivePanel";
 import SudokuGrid, { type LiveBoard } from "./components/SudokuGrid";
-import { solve, SolveError } from "./lib/api";
+import { solve, SolveError, TransientError } from "./lib/api";
 import { canStart, EMPTY_GRID, findConflicts, generatePuzzle, type Grid } from "./lib/sudoku";
 import type { DoneEvent, Segment, SolveEvent, StepEvent } from "./lib/types";
 
@@ -11,6 +11,8 @@ const AnalysisReport = lazy(() => import("./components/AnalysisReport"));
 
 interface Run {
   status: RunStatus;
+  /** waiting for a free simulator instance */
+  busy: boolean;
   puzzle: Grid;
   segments: Segment[];
   steps: StepEvent[];
@@ -76,12 +78,13 @@ export default function App() {
   };
 
   const onEvent = (ev: SolveEvent) => {
-    if (ev.type === "error") throw new SolveError(ev.message);
+    // An error mid-run (e.g. the instance ran out of memory) is retried like a dropped connection.
+    if (ev.type === "error") throw new TransientError(ev.message);
     setRun((r) => {
       if (!r) return r;
       switch (ev.type) {
         case "meta":
-          return { ...r, status: "running", segments: [...r.segments, { meta: ev, done: null }] };
+          return { ...r, status: "running", busy: false, segments: [...r.segments, { meta: ev, done: null }] };
         case "step":
           return { ...r, steps: [...r.steps, ev] };
         case "done": {
@@ -103,7 +106,7 @@ export default function App() {
     abort.current = ctrl;
     setError(null);
     setViewIndex(0);
-    setRun({ status: "starting", puzzle, segments: [], steps: [], done: null, wallSeconds: 0 });
+    setRun({ status: "starting", busy: false, puzzle, segments: [], steps: [], done: null, wallSeconds: 0 });
 
     let offset = 0;
     let segment = 0;
@@ -125,15 +128,18 @@ export default function App() {
             },
             ctrl.signal,
             { t_offset_ms: offset, segment, hints },
+            () => setRun((r) => (r ? { ...r, busy: true } : r)),
           );
         } catch (e) {
           if (ctrl.signal.aborted || e instanceof SolveError) throw e;
-          // Network hiccup: fall through and continue from the last window received.
+          // Server error or network hiccup: continue from the last window received.
         }
         if (last.done?.solved) return;
-        if (last.done?.resume) drops = 0;
-        else if (++drops > MAX_DROPS) throw new SolveError("The connection to the solver keeps dropping. Please try again.");
-        else await sleep(2000);
+        if (last.done?.resume || last.tEnd > offset) drops = 0; // progress was made
+        if (!last.done?.resume) {
+          if (++drops > MAX_DROPS) throw new SolveError("The connection to the solver keeps failing. Please try again.");
+          await sleep(2000 * drops);
+        }
         offset = last.tEnd;
         hints = last.done?.hints ?? last.hints;
         segment += 1;
@@ -187,6 +193,7 @@ export default function App() {
           meta={lastMeta}
           steps={run.steps}
           status={run.status}
+          busy={run.busy}
           viewIndex={viewIndex}
           onViewIndex={setViewIndex}
         />

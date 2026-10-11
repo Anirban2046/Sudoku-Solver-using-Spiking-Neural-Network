@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
-import { solve } from "../lib/api";
+import { solve, TransientError } from "../lib/api";
 import { niceMax } from "../components/ChartCanvas";
 import type { DoneEvent, MetaEvent, SolveEvent, StepEvent } from "../lib/types";
 
@@ -50,7 +50,7 @@ const step = (t: number, grid: number[], solved: boolean): StepEvent => ({
 const done = (solved: boolean, t_end_ms: number, grid: number[]): DoneEvent => ({
   type: "done", solved, resume: !solved, solved_at_ms: solved ? t_end_ms - 100 : null, t_end_ms, final_grid: grid,
   wall_seconds: 10, cells: { counts: Array.from({ length: 81 }, () => [9, 1, 0, 0, 0, 0, 0, 0, 0]), margin: Array(81).fill(0.9), margin_mean: 0.9 },
-  classical: { n_solutions: 1, verdict: solved ? "match" : "not_solved" }, hints: [5, 6],
+  hints: [5, 6],
   network: {
     neurons_per_pop: 5,
     spikes: { neuron_b64: btoa(String.fromCharCode(0, 0, 50, 0)), t_b64: btoa(String.fromCharCode(10, 0, 20, 0)) },
@@ -93,6 +93,63 @@ describe("continuation across requests", () => {
     expect(after.filter((el) => el.value).length).toBe(81);
     expect(after[0].value).toBe("5");
   }, 20000);
+});
+
+describe("resilience", () => {
+  const start = async () => {
+    render(<App />);
+    act(() => fireEvent.click(screen.getByRole("button", { name: "Randomly Initialize" })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Start Solving" })));
+  };
+  const g = Array(81).fill(1);
+
+  it("retries after a server error", async () => {
+    const calls: unknown[] = [];
+    vi.mocked(solve).mockImplementation(async (_p, onEvent: (ev: SolveEvent) => void, _s, cont) => {
+      calls.push(cont);
+      if (calls.length === 1) throw new TransientError("Server error 504");
+      onEvent(meta(1, 0));
+      onEvent(step(0, g, true));
+      onEvent(done(true, 100, g));
+    });
+    await start();
+    expect(await screen.findByText("solved at 0 ms", {}, { timeout: 8000 })).toBeTruthy();
+    expect(calls).toHaveLength(2);
+  }, 20000);
+
+  it("continues from the last window after an error event mid-run", async () => {
+    const calls: { t_offset_ms?: number }[] = [];
+    vi.mocked(solve).mockImplementation(async (_p, onEvent: (ev: SolveEvent) => void, _s, cont) => {
+      calls.push(cont ?? {});
+      if (calls.length === 1) {
+        onEvent(meta(0, 0));
+        onEvent(step(0, g, false));
+        onEvent({ type: "error", message: "MemoryError" });
+      }
+      onEvent(meta(1, 100));
+      onEvent(step(100, g, true));
+      onEvent(done(true, 200, g));
+    });
+    await start();
+    expect(await screen.findByText("solved at 100 ms", {}, { timeout: 8000 })).toBeTruthy();
+    expect(calls.map((c) => c.t_offset_ms)).toEqual([0, 100]);
+    expect(screen.queryByRole("alert")).toBeNull();
+  }, 20000);
+
+  it("shows that it is waiting while the simulator is busy", async () => {
+    let release = () => {};
+    vi.mocked(solve).mockImplementation(async (_p, onEvent: (ev: SolveEvent) => void, _s, _c, onBusy) => {
+      onBusy?.();
+      await new Promise<void>((r) => (release = r));
+      onEvent(meta(0, 0));
+      onEvent(step(0, g, true));
+      onEvent(done(true, 100, g));
+    });
+    await start();
+    expect(await screen.findByText("waiting for a free simulator…")).toBeTruthy();
+    await act(async () => release());
+    expect(await screen.findByText("solved at 0 ms")).toBeTruthy();
+  });
 });
 
 describe("niceMax", () => {

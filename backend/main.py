@@ -4,13 +4,24 @@ import json
 import os
 import threading
 import weakref
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-app = FastAPI(title="Sudoku Solver using Spiking Neural Network")
+@asynccontextmanager
+async def lifespan(_app):
+    yield
+    # On shutdown, stop a running simulation after its current window instead of
+    # waiting for its whole time budget.
+    from snn.engine import claim_nest_thread
+
+    claim_nest_thread()
+
+
+app = FastAPI(title="Sudoku Solver using Spiking Neural Network", lifespan=lifespan)
 
 _cors = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
 if _cors:
@@ -94,16 +105,21 @@ class SolveRequest(BaseModel):
             raise ValueError(f"at least 17 given digits are needed (got {givens})")
         from snn.helpers import has_solution
 
-        if has_solution(puzzle) is False:
+        solvable = has_solution(puzzle)
+        if solvable is False:
             raise ValueError("this puzzle has no solution")
+        if solvable is None:
+            # Don't start a run that might never end.
+            raise ValueError("couldn't confirm that this puzzle has a solution")
         return puzzle
 
 
 @app.get("/api/health")
 def health():
     import time
+    from importlib.metadata import version
 
-    from snn.engine import on_nest_thread
+    from snn.engine import claim_nest_thread, on_nest_thread
 
     def tiny_sim():
         import nest
@@ -116,16 +132,13 @@ def health():
         nest.Simulate(100.0)
         return nest.__version__, sr.n_events
 
-    def version():
-        import nest
-
-        return nest.__version__
-
     t = time.time()
-    # Don't reset the kernel under a running solve; just report that it's busy.
+    # Don't touch the kernel under a running solve; just report that it's busy
+    # (the installed version is read without importing NEST on this thread).
     if not _run_lock.acquire(blocking=False):
-        return {"nest": on_nest_thread(version), "cpus": os.cpu_count(), "busy": True}
+        return {"nest": version("nest-simulator"), "cpus": os.cpu_count(), "busy": True}
     try:
+        claim_nest_thread()  # stop a run whose client has gone away
         nest_version, spikes = on_nest_thread(tiny_sim)
     finally:
         _run_lock.release()

@@ -5,11 +5,11 @@
     "api": {
       "root": "backend/",
       "entrypoint": "main:app",
-      "functions": { "main.py": { "maxDuration": 300, "memory": 2048 } }
+      "functions": { "**/*.py": { "maxDuration": 300 } }
     }
   },
   "rewrites": [
     { "source": "/api/(.*)", "destination": { "service": "api" } },
-    { "source": "/(.*)",     "destination": { "service": "web" } }
+    { "source": "/(.*)", "destination": { "service": "web" } }
   ]
 }

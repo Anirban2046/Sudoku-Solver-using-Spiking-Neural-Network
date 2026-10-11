@@ -78,7 +78,6 @@ export interface DoneEvent {
   wall_seconds: number;
   cells: { counts: number[][]; margin: number[]; margin_mean: number };
   network: NetworkView;
-  classical: { n_solutions: number; verdict: "match" | "valid_but_different" | "not_solved" };
   /** all hinted cells so far; passed on to a continuation request */
   hints: number[];
 }

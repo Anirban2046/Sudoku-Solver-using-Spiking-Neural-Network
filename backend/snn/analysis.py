@@ -3,7 +3,7 @@
 import numpy as np
 
 from .encoding import b64_i16, b64_u16
-from .helpers import PEER_PAIRS, solve_all
+from .helpers import PEER_PAIRS
 
 
 def _equal_pairs(grid):
@@ -33,19 +33,6 @@ def cell_summary(pop_counts):
         "margin": [round(float(m), 3) for m in margin],
         "margin_mean": round(float(margin.mean()), 3),
     }
-
-
-def classical_check(puzzle, grid, solved):
-    """Compare the network's answer with a plain backtracking solver."""
-    sols = solve_all(puzzle, limit=2)
-    match = bool(sols) and np.array_equal(sols[0], np.asarray(grid).reshape(9, 9))
-    if not solved:
-        verdict = "not_solved"
-    elif match:
-        verdict = "match"
-    else:
-        verdict = "valid_but_different"
-    return {"n_solutions": min(len(sols), 2), "verdict": verdict}
 
 
 def network_view(*, grid, pop_counts, pop_size, chunk_ms, neuron_idx, spike_t, vm, recent_neuron_counts):

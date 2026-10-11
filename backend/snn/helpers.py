@@ -276,17 +276,21 @@ def _search(cells, limit, out, budget=None):
                 return
 
 
-def solve_all(puzzle, limit=2):
+def solve_all(puzzle, limit=2, max_nodes=None):
     """Returns up to ``limit`` solutions of ``puzzle`` as (9,9) arrays.
 
-    Returns an empty list if the givens already conflict.
+    Returns an empty list if the givens already conflict. With ``max_nodes``,
+    the search stops after that many nodes and returns what it found so far.
     """
     cells = [int(v) for v in np.asarray(puzzle).flatten()]
     for i, v in enumerate(cells):
         if v and any(cells[p] == v for p in PEERS[i]):
             return []
     out = []
-    _search(cells, limit, out)
+    try:
+        _search(cells, limit, out, None if max_nodes is None else [max_nodes])
+    except _Budget:
+        pass
     return [np.array(s, dtype=np.int64).reshape(9, 9) for s in out]
 
 

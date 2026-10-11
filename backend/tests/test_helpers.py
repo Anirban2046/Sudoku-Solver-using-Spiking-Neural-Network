@@ -1,6 +1,6 @@
 import numpy as np
 
-from snn.analysis import cell_summary, classical_check, conflict_cells, count_violations
+from snn.analysis import cell_summary, conflict_cells, count_violations
 from snn.helpers import PEER_PAIRS, generate_puzzle, get_puzzle, has_solution, solve_all, validate_solution
 
 
@@ -89,11 +89,9 @@ def test_cell_summary_margin():
     assert s["margin"][1] == 0.0  # silent cell
 
 
-def test_classical_check():
-    puzzle = get_puzzle(4)
-    sol = solved_grid()
-    assert classical_check(puzzle, sol, True)["verdict"] == "match"
-    assert classical_check(puzzle, sol, False)["verdict"] == "not_solved"
+def test_solve_all_node_budget():
+    assert solve_all(np.zeros((9, 9), dtype=int), 2, max_nodes=5) == []
+    assert len(solve_all(get_puzzle(6), 1, max_nodes=500_000)) == 1
 
 
 def test_b64_roundtrip():

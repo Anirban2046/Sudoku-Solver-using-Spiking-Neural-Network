@@ -179,7 +179,9 @@ export function canStart(grid: Grid, conflicts: Conflicts = findConflicts(grid))
   if (countGivens(grid) < 17) return { ok: false, reason: "Enter at least 17 numbers" };
   if (conflicts.cells.size) return { ok: false, reason: "Fix the duplicates shown in red" };
   const n = countSolutions(grid, 1, 1000);
-  if (n === "timeout") return { ok: true, note: "Couldn't verify solvability quickly; the network will try anyway." };
+  // Every solvable puzzle is found in milliseconds; a search this long means the
+  // puzzle is (almost certainly) impossible, and a run on it could never end.
+  if (n === "timeout") return { ok: false, reason: "This puzzle doesn't seem to have a solution" };
   if (n === 0) return { ok: false, reason: "This puzzle has no solution" };
   return { ok: true };
 }

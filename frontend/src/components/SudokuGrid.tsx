@@ -89,6 +89,8 @@ export default function SudokuGrid({ puzzle, editable, conflicts, live, onChange
                 tabIndex={editable ? 0 : -1}
                 value={value ? String(value) : ""}
                 onKeyDown={(e) => onKeyDown(e, i)}
+                // select the digit so typing on any keyboard (incl. mobile) replaces it
+                onFocus={(e) => e.currentTarget.select()}
                 onChange={(e) => onInput(e.target.value, i)}
               />
               {live?.changed.has(i) && <span key={live.k} className="flash" aria-hidden="true" />}

@@ -43,21 +43,31 @@ import nest
 import numpy as np
 
 from . import sudoku_net
-from .analysis import cell_summary, classical_check, conflict_cells, count_violations, network_view
-from .helpers import PEERS, solve_all, validate_solution
+from .analysis import cell_summary, count_violations, network_view
+from .control import choose_hints, kick_targets
+from .helpers import solve_all, validate_solution
 from .sudoku_net import SudokuNet
 
 KICK_I_E = -5.0  # bias current (nA scale, as neuron_params) that silences a population
 RESETS_AFTER_FUTILE_KICKS = 4
+HINT_SOLVER_NODES = 500_000  # search budget of the classical solver used for hints
 VM_INTERVAL_MS = 1.0  # membrane-potential sampling of one neuron per population
 RATE_WINDOW_MS = 1000  # span of the final firing-rate statistics
 
 
 def _threads():
-    # CPUs this process may actually use (cpu_count() reports the host's in containers).
-    if hasattr(os, "sched_getaffinity"):
-        return len(os.sched_getaffinity(0))
-    return os.cpu_count() or 1
+    """CPUs this process may actually use. cpu_count() reports the host's CPUs
+    in containers; the affinity mask and the cgroup CPU quota (e.g. 1 vCPU on
+    a serverless function) are both honoured."""
+    n = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as f:
+            quota, period = f.read().split()[:2]
+        if quota != "max":
+            n = min(n, max(1, int(-(-int(quota) // int(period)))))
+    except (OSError, ValueError):
+        pass
+    return max(1, n)
 
 
 def _connections(net):
@@ -112,42 +122,6 @@ def _readout(counts, rng):
     return grid
 
 
-def _kick_targets(puzzle, grid, wide=False):
-    """(cell, digit) pairs to silence: the shown digit of every non-given cell in
-    a conflict (with ``wide``, of every non-given cell sharing a row, column or
-    box with a conflict), and the wrong digit on every overridden given cell."""
-    flat_p = puzzle.reshape(81)
-    flat_g = grid.reshape(81)
-    cells = set(int(c) for c in conflict_cells(flat_g))
-    if wide:
-        cells |= {p for c in list(cells) for p in PEERS[c]}
-    targets = set()
-    for c in cells:
-        if flat_p[c] == 0:
-            targets.add((int(c), int(flat_g[c])))
-    for c in np.flatnonzero((flat_p != 0) & (flat_p != flat_g)):
-        targets.add((int(c), int(flat_g[c])))
-    return sorted(targets)
-
-
-def _choose_hints(puzzle, grid, solution, hinted, n, rng):
-    """Up to ``n`` cells to hint: non-given, not yet hinted, preferring cells in
-    a conflict, then cells showing a wrong digit, then any other cell."""
-    flat_p = puzzle.reshape(81)
-    flat_g = grid.reshape(81)
-    free = [c for c in range(81) if flat_p[c] == 0 and c not in hinted]
-    conflict = set(int(c) for c in conflict_cells(flat_g))
-    tiers = (
-        [c for c in free if c in conflict],
-        [c for c in free if c not in conflict and flat_g[c] != solution[c]],
-        [c for c in free if c not in conflict and flat_g[c] == solution[c]],
-    )
-    chosen = []
-    for tier in tiers:
-        chosen += [int(c) for c in rng.permutation(tier)][: n - len(chosen)]
-    return chosen
-
-
 def run(
     puzzle,
     noise_rate=350.0,
@@ -181,19 +155,26 @@ def run(
     build_seconds = time.time() - t_build
 
     hinted = []
+    fixed = puzzle.copy().reshape(81)  # givens plus hinted cells, which kicks leave alone
     cache = {}
 
     def solution():
-        """Classical solution, computed when the first hint is needed."""
+        """Classical solution (None if not found quickly), computed when the
+        first hint is needed."""
         if "s" not in cache:
-            cache["s"] = solve_all(puzzle, 1)[0].reshape(81)
+            sols = solve_all(puzzle, 1, max_nodes=HINT_SOLVER_NODES)
+            cache["s"] = sols[0].reshape(81) if sols else None
         return cache["s"]
 
     def add_hints(cells):
+        sol = solution()
+        if sol is None:
+            return
         for c in cells:
-            pop = net.io_indices[c // 9, c % 9, solution()[c] - 1]
+            pop = net.io_indices[c // 9, c % 9, sol[c] - 1]
             nest.GetConnections(net.stim[pop]).set({"weight": sudoku_net.weight_stim})
             hinted.append(int(c))
+            fixed[c] = sol[c]
 
     add_hints([c for c in hints if puzzle.reshape(81)[c] == 0])
     connections = _connections(net)
@@ -273,13 +254,15 @@ def run(
         performance = 1.0 if valid else float((boxes.sum() + rows.sum() + cols.sum()) / 27)
         violations = count_violations(grid)
         overridden = int(((puzzle != 0) & (puzzle != grid)).sum())
+        # hinted cells showing a wrong digit count as stalled progress too
+        off_hint = int(sum(grid.reshape(81)[c] != fixed[c] for c in hinted))
         winners = np.zeros(729, dtype=bool)
         winners[np.arange(81) * 9 + grid.reshape(81) - 1] = True
         n_win = 81 * pop_size
 
         # Stall detection and perturbation.
         kick = None
-        bad = violations + overridden
+        bad = violations + overridden + off_hint
         if not valid:
             best_overall = bad if best_overall is None else min(best_overall, bad)
             if best_bad is None or bad < best_bad:
@@ -290,15 +273,15 @@ def run(
                 if futile_kicks >= RESETS_AFTER_FUTILE_KICKS:
                     net.reset_V_m()
                     kick = {"kind": "reset", "cells": []}
-                    if hint_after_ms is not None and t_end >= hint_after_ms:
-                        new = _choose_hints(puzzle, grid, solution(), set(hinted), hint_batch, rng)
+                    if hint_after_ms is not None and t_end >= hint_after_ms and solution() is not None:
+                        new = choose_hints(puzzle, grid, solution(), set(hinted), hint_batch, rng)
                         if new:
                             add_hints(new)
                             kick = {"kind": "hint", "cells": new}
                     futile_kicks = 0
                 else:
                     # escalate: a kick that didn't help is followed by a wider one
-                    pending_kick = _kick_targets(puzzle, grid, wide=futile_kicks > 0)
+                    pending_kick = kick_targets(fixed.reshape(9, 9), grid, wide=futile_kicks > 0)
                     kick = {"kind": "kick", "cells": sorted({c for c, _ in pending_kick})}
                     futile_kicks = futile_kicks + 1 if bad >= best_overall else 0
                 best_bad, stuck = None, 0
@@ -353,6 +336,5 @@ def run(
             vm=_vm_matrix(multimeter, first_gid, pop_size, t_start, chunk_ms),
             recent_neuron_counts=list(recent_neuron_counts),
         ),
-        "classical": classical_check(puzzle, grid, bool(valid)),
         "hints": list(hinted),
     }

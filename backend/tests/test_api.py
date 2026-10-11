@@ -56,6 +56,28 @@ def test_duplicate_422(client):
     assert "appears more than once in row 1" in r.text
 
 
+def test_unverifiable_422(client, monkeypatch):
+    import snn.helpers
+
+    monkeypatch.setattr(snn.helpers, "has_solution", lambda puzzle: None)
+    r = client.post("/api/solve", json={"puzzle": get_puzzle(4).tolist()})
+    assert r.status_code == 422
+    assert "couldn't confirm" in r.text
+
+
+def test_health_busy_answers_at_once(client):
+    import time
+
+    assert main._run_lock.acquire(blocking=False)
+    try:
+        t = time.time()
+        body = client.get("/api/health").json()
+        assert body["busy"] is True and body["nest"] == "3.10.0"
+        assert time.time() - t < 2
+    finally:
+        main._run_lock.release()
+
+
 def test_busy_429(client):
     assert main._run_lock.acquire(blocking=False)
     try:

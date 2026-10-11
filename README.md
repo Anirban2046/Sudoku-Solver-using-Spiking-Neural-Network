@@ -43,8 +43,11 @@ unchanged network (`backend/snn/simulation.py`):
 * **No overall time limit.** A request stops when its wall-clock budget runs
   out (`WALL_BUDGET_S`, default 240 s, below Vercel's 300 s limit). The browser
   then sends a follow-up request that rebuilds the network with a new seed and
-  continues the same timeline, carrying over any hints. Dropped connections are
-  retried the same way. Unsolvable puzzles are rejected up front.
+  continues the same timeline, carrying over any hints. Dropped connections,
+  server errors and error events are retried the same way, and while the
+  simulator is busy the browser keeps waiting for up to three minutes.
+  Puzzles that are unsolvable, or whose solvability can't be confirmed
+  quickly, are rejected up front, so a run can never be endless.
 
 ## What the page shows
 
@@ -97,8 +100,10 @@ GitHub Actions (`.github/workflows/ci.yml`) runs both suites on every push.
 ## Deploy (Vercel)
 
 `vercel.json` defines one Vercel project with two services: the Vite frontend
-(`web`) and the FastAPI backend (`api`, 300 s max duration, 2 GB). Deploy it
-either way:
+(`web`) and the FastAPI backend (`api`, 300 s max duration). Function memory
+can't be set in `vercel.json` with Fluid compute; the default 2 GB is plenty
+(a run uses about 300 MB), and it can be changed under Project → Settings →
+Functions. Deploy it either way:
 
 * **Dashboard:** import the GitHub repo into Vercel, keep the root directory
   at the repo root, and deploy.
@@ -141,14 +146,16 @@ If NEST can't run as a Vercel function, deploy `backend/` with its
   
   When `done` has `resume: true`, the request ran out of its budget and the
   client should continue. An invalid or unsolvable board returns `422`. If a
-  run is already in progress, it returns `429` (the frontend retries).
+  run is already in progress on that instance, it returns `429` (the frontend
+  waits and retries). A run whose client disconnects is stopped as soon as
+  another request needs the simulator.
 
 ## Layout
 
 ```
 backend/   FastAPI app (main.py) and the snn package:
            sudoku_net.py (NEST network, verbatim + one upstream bug fix),
-           simulation.py (build, run loop, kick/restart/hint controller),
+           simulation.py (build and run loop), control.py (kick/hint choice),
            engine.py (runs NEST on one dedicated thread),
            analysis.py (network statistics), encoding.py,
            helpers.py (validation, classical solver)

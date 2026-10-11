@@ -5,7 +5,7 @@ import pytest
 
 from snn.encoding import decode_b64
 from snn.engine import run_simulation
-from snn.helpers import generate_puzzle, get_puzzle
+from snn.helpers import generate_puzzle, get_puzzle, solve_all, validate_solution
 
 
 @pytest.fixture(scope="module")
@@ -21,7 +21,9 @@ def test_event_order_and_solved(run40):
     assert set(types[1:-1]) == {"step"}
     done = events[-1]
     assert done["solved"] is True and done["resume"] is False
-    assert done["classical"]["verdict"] == "match"
+    final = np.array(done["final_grid"]).reshape(9, 9)
+    assert validate_solution(run40[0], final)[0]
+    assert np.array_equal(final, solve_all(run40[0], 1)[0])  # unique puzzle: the one solution
     assert done["final_grid"] == events[-2]["grid"]
     assert len(done["cells"]["counts"]) == 81 and len(done["cells"]["margin"]) == 81
 
@@ -105,3 +107,34 @@ def test_hints_added_and_carried_over():
     meta = follow_up[0]
     assert meta["hints"] == done["hints"]
     assert meta["connections"]["stimulus_active"] == (meta["givens"] + len(hinted)) * 5
+
+
+def test_kicks_leave_fixed_cells_alone():
+    from snn.control import kick_targets
+
+    sol = solve_all(get_puzzle(4), 1)[0]
+    grid = sol.copy()
+    grid[0, 0], grid[0, 3] = grid[0, 3], grid[0, 0]  # swap: breaks columns 1 and 4 and two boxes
+    fixed = np.zeros((9, 9), dtype=int)
+    fixed[0, 0] = sol[0, 0]  # a hinted cell now showing a wrong digit
+    fixed[1, 0] = sol[1, 0]  # a hinted cell showing its own digit, inside the conflict's column
+    targets = dict(kick_targets(fixed, grid, wide=True))
+    assert targets[0] == grid[0, 0]  # the wrong digit on the fixed cell is silenced
+    assert 9 not in targets  # the correct fixed cell is never silenced
+    assert 3 in targets  # the free cell in the conflict is
+
+
+def test_choose_hints_prefers_conflicts():
+    from snn.control import choose_hints
+
+    puzzle = get_puzzle(4)
+    sol = solve_all(puzzle, 1)[0]
+    grid = sol.copy()
+    flat = grid.reshape(81)
+    free = [c for c in range(81) if puzzle.reshape(81)[c] == 0]
+    wrong = free[0]
+    flat[wrong] = flat[wrong] % 9 + 1  # one free cell shows a wrong (conflicting) digit
+    hints = choose_hints(puzzle, grid, sol.reshape(81), set(), 4, np.random.default_rng(0))
+    assert len(hints) == 4 and all(puzzle.reshape(81)[c] == 0 for c in hints)
+    assert wrong in hints
+    assert choose_hints(puzzle, grid, sol.reshape(81), set(free), 4, np.random.default_rng(0)) == []

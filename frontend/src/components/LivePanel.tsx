@@ -7,19 +7,21 @@ interface Props {
   meta: MetaEvent | null;
   steps: StepEvent[];
   status: RunStatus;
+  busy: boolean;
   viewIndex: number;
   onViewIndex: (i: number) => void;
 }
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 
-export default function LivePanel({ meta, steps, status, viewIndex, onViewIndex }: Props) {
+export default function LivePanel({ meta, steps, status, busy, viewIndex, onViewIndex }: Props) {
   const step = steps[viewIndex] ?? null;
   const latest = steps[steps.length - 1] ?? null;
   const replaying = status === "done" && step !== latest;
 
   let statusText = "starting… (loading NEST and building the network)";
   if (status === "running" && meta) statusText = "solving…";
+  if (busy && status !== "done" && status !== "error") statusText = "waiting for a free simulator…";
   if (status === "done") statusText = `solved at ${fmt(latest?.t_start_ms ?? 0)} ms`;
   if (status === "error") statusText = "stopped with an error";
 

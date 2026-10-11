@@ -3,23 +3,26 @@ import Controls from "./components/Controls";
 import LivePanel, { type RunStatus } from "./components/LivePanel";
 import SudokuGrid, { type LiveBoard } from "./components/SudokuGrid";
 import { solve, SolveError } from "./lib/api";
-import { b64ToU16 } from "./lib/decode";
 import { canStart, EMPTY_GRID, findConflicts, generatePuzzle, type Grid } from "./lib/sudoku";
-import type { DoneEvent, MetaEvent, RasterWindow, SolveEvent, StepEvent } from "./lib/types";
+import type { DoneEvent, Segment, SolveEvent, StepEvent } from "./lib/types";
+
+// The report is only needed once a run has finished.
+const AnalysisReport = lazy(() => import("./components/AnalysisReport"));
 
 interface Run {
   status: RunStatus;
   puzzle: Grid;
-  meta: MetaEvent | null;
+  segments: Segment[];
   steps: StepEvent[];
-  raster: RasterWindow[];
   done: DoneEvent | null;
+  wallSeconds: number;
 }
 
-// The report pulls in KaTeX; load it only once a run has finished.
-const AnalysisReport = lazy(() => import("./components/AnalysisReport"));
+/** Consecutive dropped connections tolerated before giving up. */
+const MAX_DROPS = 3;
 
 const toRows = (g: Grid) => Array.from({ length: 9 }, (_, r) => g.slice(r * 9, r * 9 + 9));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export default function App() {
   const [puzzle, setPuzzle] = useState<Grid>(EMPTY_GRID);
@@ -34,11 +37,13 @@ export default function App() {
 
   useEffect(() => () => abort.current?.abort(), []);
 
-  // While the stream is live, the board follows the newest window.
+  // The board follows the newest window while the stream is live, and lands on
+  // the final one when the run ends (the last step and "done" arrive together).
   const nSteps = run?.steps.length ?? 0;
+  const status = run?.status;
   useEffect(() => {
-    if (running && nSteps) setViewIndex(nSteps - 1);
-  }, [running, nSteps]);
+    if (nSteps) setViewIndex(nSteps - 1);
+  }, [status, nSteps]);
 
   const clearRun = () => {
     abort.current?.abort();
@@ -62,24 +67,21 @@ export default function App() {
       if (!r) return r;
       switch (ev.type) {
         case "meta":
-          return { ...r, status: "running", meta: ev };
-        case "step": {
-          const win: RasterWindow = {
-            k: ev.k,
-            tStart: ev.t_start_ms,
-            pop: b64ToU16(ev.raster.pop_b64),
-            t: b64ToU16(ev.raster.t_b64),
-            grid: ev.grid,
-          };
-          const light = { ...ev, raster: { pop_b64: "", t_b64: "" }, pop_counts_b64: "" };
-          return { ...r, steps: [...r.steps, light], raster: [...r.raster, win] };
+          return { ...r, status: "running", segments: [...r.segments, { meta: ev, done: null }] };
+        case "step":
+          return { ...r, steps: [...r.steps, ev] };
+        case "done": {
+          const segments = r.segments.map((s, i) => (i === r.segments.length - 1 ? { ...s, done: ev } : s));
+          const wallSeconds = r.wallSeconds + ev.wall_seconds;
+          return ev.solved ? { ...r, segments, wallSeconds, status: "done", done: ev } : { ...r, segments, wallSeconds };
         }
-        case "done":
-          return { ...r, status: "done", done: ev };
       }
     });
   };
 
+  /** Runs the network until it solves the puzzle. Each request stops before the
+   *  host's function timeout; the next one continues the timeline with a freshly
+   *  built network, so there is no overall time limit. */
   const onStart = async () => {
     if (running || !check.ok) return;
     abort.current?.abort();
@@ -87,18 +89,41 @@ export default function App() {
     abort.current = ctrl;
     setError(null);
     setViewIndex(0);
-    setRun({ status: "starting", puzzle, meta: null, steps: [], raster: [], done: null });
-    let finished = false;
+    setRun({ status: "starting", puzzle, segments: [], steps: [], done: null, wallSeconds: 0 });
+
+    let offset = 0;
+    let segment = 0;
+    let hints: number[] = [];
+    let drops = 0;
     try {
-      await solve(
-        toRows(puzzle),
-        (ev) => {
-          if (ev.type === "done") finished = true;
-          onEvent(ev);
-        },
-        ctrl.signal,
-      );
-      if (!finished) throw new SolveError("The connection closed before the run finished.");
+      for (;;) {
+        const last: { done: DoneEvent | null; tEnd: number; hints: number[] } = { done: null, tEnd: offset, hints };
+        try {
+          await solve(
+            toRows(puzzle),
+            (ev) => {
+              if (ev.type === "step") {
+                last.tEnd = ev.t_end_ms;
+                if (ev.kick?.kind === "hint") last.hints = [...last.hints, ...ev.kick.cells];
+              }
+              if (ev.type === "done") last.done = ev;
+              onEvent(ev);
+            },
+            ctrl.signal,
+            { t_offset_ms: offset, segment, hints },
+          );
+        } catch (e) {
+          if (ctrl.signal.aborted || e instanceof SolveError) throw e;
+          // Network hiccup: fall through and continue from the last window received.
+        }
+        if (last.done?.solved) return;
+        if (last.done?.resume) drops = 0;
+        else if (++drops > MAX_DROPS) throw new SolveError("The connection to the solver keeps dropping. Please try again.");
+        else await sleep(2000);
+        offset = last.tEnd;
+        hints = last.done?.hints ?? last.hints;
+        segment += 1;
+      }
     } catch (e) {
       if (ctrl.signal.aborted) return;
       const msg = e instanceof SolveError ? e.message : `Could not reach the solver: ${(e as Error).message}`;
@@ -108,22 +133,25 @@ export default function App() {
   };
 
   const step = run?.steps[viewIndex] ?? null;
+  // Cells hinted up to the window on the board.
+  const hinted = useMemo(
+    () => new Set((run?.steps ?? []).slice(0, viewIndex + 1).flatMap((s) => (s.kick?.kind === "hint" ? s.kick.cells : []))),
+    [run?.steps, viewIndex],
+  );
   const prev = viewIndex > 0 ? run?.steps[viewIndex - 1] : null;
   const live: LiveBoard | null =
     run && step
       ? {
-          k: step.k,
+          k: viewIndex,
           grid: step.grid,
           validRows: step.valid_rows,
           validCols: step.valid_cols,
           validBoxes: step.valid_boxes,
-          tie: step.tie,
-          silent: step.silent,
-          changed: new Set(
-            step.grid.flatMap((d, i) => ((prev ? prev.grid[i] : run.puzzle[i]) !== d ? [i] : [])),
-          ),
+          changed: new Set(step.grid.flatMap((d, i) => ((prev ? prev.grid[i] : run.puzzle[i]) !== d ? [i] : []))),
+          hinted,
         }
       : null;
+  const lastMeta = run?.segments[run.segments.length - 1]?.meta ?? null;
 
   return (
     <main>
@@ -148,18 +176,24 @@ export default function App() {
       )}
       {run && (
         <LivePanel
-          meta={run.meta}
+          meta={lastMeta}
           steps={run.steps}
-          raster={run.raster}
           status={run.status}
-          solved={run.done?.solved ?? null}
+          segment={Math.max(0, run.segments.length - 1)}
           viewIndex={viewIndex}
           onViewIndex={setViewIndex}
         />
       )}
-      {run?.done && run.meta && run.done.analysis.outcome && (
-        <Suspense fallback={<p className="note">Loading the analysis…</p>}>
-          <AnalysisReport analysis={run.done.analysis} meta={run.meta} raster={run.raster} />
+      {run?.done && lastMeta && (
+        <Suspense fallback={<p className="note">Loading the results…</p>}>
+          <AnalysisReport
+            puzzle={run.puzzle}
+            meta={lastMeta}
+            steps={run.steps}
+            done={run.done}
+            wallSeconds={run.wallSeconds}
+            segments={run.segments.length}
+          />
         </Suspense>
       )}
     </main>

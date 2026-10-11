@@ -23,21 +23,19 @@ def on_nest_thread(fn, *args, **kwargs):
     return _nest_thread.submit(fn, *args, **kwargs).result()
 
 
-def _safe_run(*args):
+def _safe_run(puzzle, options):
     try:
         from .simulation import run
 
-        yield from run(*args)
+        yield from run(puzzle, **options)
     except Exception as exc:  # noqa: BLE001 - reported to the client
         traceback.print_exc()
         yield {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
 
 
-def run_simulation(
-    puzzle, noise_rate=350.0, max_sim_ms=20000, chunk_ms=100, seed=None, raster_per_pop=1, pop_size=5
-):
-    """Generator of simulation events. Never raises: failures become one
-    ``{"type": "error", "message": ...}`` event.
+def run_simulation(puzzle, **options):
+    """Generator of simulation events (see ``simulation.run`` for the options).
+    Never raises: failures become one ``{"type": "error", "message": ...}`` event.
 
     The simulation itself runs on the dedicated NEST thread; events are handed
     over through a queue, so the caller may iterate from any thread. Closing the
@@ -48,7 +46,7 @@ def run_simulation(
 
     def worker():
         try:
-            for event in _safe_run(puzzle, noise_rate, max_sim_ms, chunk_ms, seed, raster_per_pop, pop_size):
+            for event in _safe_run(puzzle, options):
                 if stop.is_set():
                     break
                 events.put(event)

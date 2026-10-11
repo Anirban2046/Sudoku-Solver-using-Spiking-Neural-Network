@@ -27,8 +27,9 @@ r"""Helper functions for the Sudoku solver
 browser draws the board instead (with the invalid-box frame placed at
 ``(row=3*i, col=3*j)``, fixing the upstream ``(3*j, 3*j)`` bug).
 
-The classical backtracking solver and the puzzle generator are additions used
-for the "classical check" in the analysis and for tests.
+The classical backtracking solver, its node-limited solvability check and the
+puzzle generator are additions: they reject unsolvable puzzles, check the
+network's answer, and generate test puzzles.
 
 :Authors: J Gille, S Furber, A Rowley (ported functions)
 """
@@ -213,21 +214,6 @@ def validate_solution(puzzle, solution):
     return valid, boxes, rows, cols
 
 
-def get_progress(puzzle, solution):
-    """Performance score from ``plot_progress.py``: 1.0 for a valid solution,
-    otherwise the fraction of the 27 rows, columns and boxes that are valid."""
-    valid, boxes, rows, cols = validate_solution(puzzle, solution)
-    if valid:
-        return 1.0
-    return float((boxes.sum() + rows.sum() + cols.sum()) / 27)
-
-
-def givens_kept(puzzle, solution):
-    """True if every given digit of the puzzle is unchanged in ``solution``."""
-    input_cells = np.where(puzzle != 0)
-    return bool((puzzle[input_cells] == solution[input_cells]).all())
-
-
 # ---------------------------------------------------------------------------
 # Classical backtracking solver (bitmask candidates, minimum remaining values)
 # ---------------------------------------------------------------------------
@@ -251,8 +237,17 @@ PEERS = _peers()
 PEER_PAIRS = np.array([(i, j) for i in range(81) for j in PEERS[i] if j > i], dtype=np.int16)
 
 
-def _search(cells, limit, out):
-    """Depth-first search; appends complete grids to ``out`` until ``limit``."""
+class _Budget(Exception):
+    pass
+
+
+def _search(cells, limit, out, budget=None):
+    """Depth-first search; appends complete grids to ``out`` until ``limit``.
+    ``budget`` is a one-element list of remaining nodes, or None for no limit."""
+    if budget is not None:
+        budget[0] -= 1
+        if budget[0] < 0:
+            raise _Budget
     best, best_cands, best_n = -1, 0, 10
     for i in range(81):
         if cells[i]:
@@ -275,7 +270,7 @@ def _search(cells, limit, out):
     for d in range(1, 10):
         if best_cands & (1 << d):
             cells[best] = d
-            _search(cells, limit, out)
+            _search(cells, limit, out, budget)
             cells[best] = 0
             if len(out) >= limit:
                 return
@@ -293,6 +288,20 @@ def solve_all(puzzle, limit=2):
     out = []
     _search(cells, limit, out)
     return [np.array(s, dtype=np.int64).reshape(9, 9) for s in out]
+
+
+def has_solution(puzzle, max_nodes=200_000):
+    """True or False, or None if the search exceeded ``max_nodes``."""
+    cells = [int(v) for v in np.asarray(puzzle).flatten()]
+    for i, v in enumerate(cells):
+        if v and any(cells[p] == v for p in PEERS[i]):
+            return False
+    out = []
+    try:
+        _search(cells, 1, out, [max_nodes])
+    except _Budget:
+        return None
+    return bool(out)
 
 
 def generate_puzzle(givens=36, rng=None):

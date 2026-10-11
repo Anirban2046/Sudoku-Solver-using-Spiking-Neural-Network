@@ -32,9 +32,9 @@ export async function solve(
   puzzle: number[][],
   onEvent: (ev: SolveEvent) => void,
   signal?: AbortSignal,
-  seed?: number,
+  continuation: { t_offset_ms?: number; segment?: number; seed?: number; hints?: number[] } = {},
 ): Promise<void> {
-  const body = JSON.stringify(seed ? { puzzle, seed } : { puzzle });
+  const body = JSON.stringify({ puzzle, ...continuation });
   let res: Response | undefined;
   for (let attempt = 0; attempt <= 3; attempt++) {
     res = await fetch(`${API_BASE}/api/solve`, {

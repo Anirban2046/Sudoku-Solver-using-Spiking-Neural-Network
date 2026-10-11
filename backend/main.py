@@ -31,9 +31,17 @@ def _env_float(name, default, lo, hi):
 def settings():
     return {
         "noise_rate": _env_float("NOISE_RATE", 350.0, 0.0, 5000.0),
-        "max_sim_ms": int(_env_float("MAX_SIM_MS", 20000, 100, 60000)),
-        "raster_per_pop": int(_env_float("RASTER_NEURONS_PER_POP", 1, 1, 5)),
+        # Wall-clock seconds one request may simulate before handing over to a
+        # follow-up request; keep it well below the function timeout (300 s).
+        "wall_budget_s": _env_float("WALL_BUDGET_S", 240.0, 10.0, 280.0),
+        # Simulated time after which restarts start adding hints (negative: never).
+        "hint_after_ms": _hint_after(),
     }
+
+
+def _hint_after():
+    value = _env_float("HINT_AFTER_MS", 15000.0, -1.0, 1e9)
+    return None if value < 0 else int(value)
 
 
 def _duplicates(puzzle):
@@ -58,6 +66,18 @@ def _duplicates(puzzle):
 class SolveRequest(BaseModel):
     puzzle: list[list[int]]
     seed: int | None = Field(default=None, ge=1, le=2**31 - 1)
+    # Continuation of an earlier request that ran out of its wall-clock budget.
+    t_offset_ms: int = Field(default=0, ge=0, le=10**9)
+    segment: int = Field(default=0, ge=0, le=10**6)
+    # Cells (0..80) hinted by earlier requests of the same run.
+    hints: list[int] = Field(default_factory=list, max_length=81)
+
+    @field_validator("hints")
+    @classmethod
+    def check_hints(cls, hints):
+        if any(not 0 <= c <= 80 for c in hints):
+            raise ValueError("hints must be cell indices from 0 to 80")
+        return sorted(set(hints))
 
     @field_validator("puzzle")
     @classmethod
@@ -72,6 +92,10 @@ class SolveRequest(BaseModel):
         givens = sum(1 for row in puzzle for v in row if v)
         if givens < 17:
             raise ValueError(f"at least 17 given digits are needed (got {givens})")
+        from snn.helpers import has_solution
+
+        if has_solution(puzzle) is False:
+            raise ValueError("this puzzle has no solution")
         return puzzle
 
 
@@ -118,11 +142,12 @@ def _release_once():
     return release
 
 
-def _ndjson(puzzle, seed, cfg, release):
+def _ndjson(req, cfg, release):
     try:
         from snn.engine import run_simulation
 
-        for event in run_simulation(puzzle, seed=seed, **cfg):
+        options = dict(cfg, seed=req.seed, t_offset_ms=req.t_offset_ms, segment=req.segment, hints=req.hints)
+        for event in run_simulation(req.puzzle, **options):
             yield json.dumps(event, separators=(",", ":")) + "\n"
     finally:
         release()
@@ -134,7 +159,7 @@ def solve(req: SolveRequest):
         raise HTTPException(status_code=429, detail="busy")
     release = _release_once()
     try:
-        gen = _ndjson(req.puzzle, req.seed, settings(), release)
+        gen = _ndjson(req, settings(), release)
         # If the client goes away before the stream starts, the generator body
         # never runs; the finalizer still frees the lock.
         weakref.finalize(gen, release)

@@ -11,7 +11,7 @@ export const boxOf = (i: number) => Math.floor(rowOf(i) / 3) * 3 + Math.floor(co
 
 type Unit = { kind: "row" | "column" | "box"; index: number; cells: number[] };
 
-export const UNITS: Unit[] = (() => {
+const UNITS: Unit[] = (() => {
   const units: Unit[] = [];
   for (let k = 0; k < 9; k++) {
     units.push({ kind: "row", index: k, cells: Array.from({ length: 9 }, (_, c) => k * 9 + c) });
@@ -25,7 +25,7 @@ export const UNITS: Unit[] = (() => {
   return units;
 })();
 
-export const PEERS: number[][] = Array.from({ length: 81 }, (_, i) => {
+const PEERS: number[][] = Array.from({ length: 81 }, (_, i) => {
   const s = new Set<number>();
   for (const u of UNITS) if (u.cells.includes(i)) u.cells.forEach((c) => c !== i && s.add(c));
   return [...s].sort((a, b) => a - b);

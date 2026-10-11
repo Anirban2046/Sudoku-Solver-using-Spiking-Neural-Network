@@ -8,8 +8,8 @@ export interface LiveBoard {
   validCols: boolean[];
   validBoxes: boolean[];
   changed: Set<number>;
-  tie: boolean[];
-  silent: boolean[];
+  /** cells stimulated with their correct digit as a last-resort hint */
+  hinted: Set<number>;
 }
 
 interface Props {
@@ -75,10 +75,8 @@ export default function SudokuGrid({ puzzle, editable, conflicts, live, onChange
           if (r % 3 === 2 && r < 8) classes.push("edge-b");
           if (conflicts?.has(i)) classes.push("conflict");
           if (given) classes.push(live && live.grid[i] !== puzzle[i] ? "overridden" : "given");
+          else if (live?.hinted.has(i)) classes.push("hinted");
           else if (live) classes.push("network");
-          let title: string | undefined;
-          if (live?.silent[i]) title = "no spikes in this window; digit picked at random";
-          else if (live?.tie[i]) title = "tie between digits; picked at random";
           return (
             <div key={i} className={classes.join(" ")}>
               <input
@@ -93,7 +91,6 @@ export default function SudokuGrid({ puzzle, editable, conflicts, live, onChange
                 readOnly={!editable}
                 tabIndex={editable ? 0 : -1}
                 value={value ? String(value) : ""}
-                title={title}
                 onKeyDown={(e) => onKeyDown(e, i)}
                 onChange={(e) => onInput(e.target.value, i)}
               />

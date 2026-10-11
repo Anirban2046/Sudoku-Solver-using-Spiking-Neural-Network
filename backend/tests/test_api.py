@@ -32,6 +32,22 @@ def test_invalid_board_422(client, puzzle):
     assert client.post("/api/solve", json={"puzzle": puzzle}).status_code == 422
 
 
+def test_unsolvable_422(client):
+    p = np.zeros((9, 9), dtype=int)
+    p[0, 1:5] = [1, 2, 3, 4]
+    p[1:3, 0] = [5, 6]
+    p[1, 1], p[2, 2], p[5, 0] = 7, 8, 9
+    p[8, 8], p[7, 7], p[6, 6], p[8, 4], p[7, 3], p[6, 5], p[4, 8], p[3, 7], p[4, 4] = 1, 2, 3, 5, 6, 7, 8, 9, 1
+    r = client.post("/api/solve", json={"puzzle": p.tolist()})
+    assert r.status_code == 422
+    assert "no solution" in r.text
+
+
+def test_bad_hints_422(client):
+    r = client.post("/api/solve", json={"puzzle": get_puzzle(4).tolist(), "hints": [81]})
+    assert r.status_code == 422
+
+
 def test_duplicate_422(client):
     p = get_puzzle(4).copy()
     p[0, 0] = 1  # 1 already at (0, 1)
@@ -51,14 +67,16 @@ def test_busy_429(client):
 
 
 def test_stream(client, monkeypatch):
-    monkeypatch.setenv("MAX_SIM_MS", "300")
+    monkeypatch.setenv("WALL_BUDGET_S", "10")
     puzzle = generate_puzzle(36, np.random.default_rng(3)).tolist()
-    with client.stream("POST", "/api/solve", json={"puzzle": puzzle, "seed": 5}) as r:
+    body = {"puzzle": puzzle, "seed": 5, "t_offset_ms": 1000, "segment": 1}
+    with client.stream("POST", "/api/solve", json=body) as r:
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("application/x-ndjson")
         assert r.headers["x-accel-buffering"] == "no"
         events = [json.loads(line) for line in r.iter_lines() if line]
     assert events[0]["type"] == "meta" and events[0]["seed"] == 5
+    assert events[0]["segment"] == 1 and events[1]["t_start_ms"] == 1000
     assert events[-1]["type"] == "done"
-    assert 1 <= sum(e["type"] == "step" for e in events) <= 3
+    assert events[-1]["solved"] or events[-1]["resume"]
     assert not main._run_lock.locked()  # released after the stream

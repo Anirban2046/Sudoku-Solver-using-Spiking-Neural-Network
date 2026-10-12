@@ -6,7 +6,7 @@ shows the network's activity live in the browser.
 
 **Live demo:** <https://sudoku-solver-using-spiking-neural-network.vercel.app/>
 
-![The application after solving a puzzle: the solved board, the live statistics and the performance plot](docs/screenshot.png)
+![The application after solving a puzzle: the solved board, the live statistics and the performance plot, followed by the network analysis down to the firing-rate histogram](docs/screenshot.png)
 
 ---
 

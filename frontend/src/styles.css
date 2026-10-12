@@ -20,8 +20,8 @@
   --btn-bg: #21262d;
   --btn-hover: #30363d;
   --btn-border: rgba(240, 246, 252, 0.1);
-  --primary-bg: #238636;
-  --primary-hover: #1f7a31; /* darker on hover keeps white text above 4.5:1 */
+  --primary-bg: #1e3a8a; /* midnight blue */
+  --primary-hover: #1e40af;
   --radius: 6px;
 }
 

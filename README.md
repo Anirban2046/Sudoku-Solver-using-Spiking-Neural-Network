@@ -5,7 +5,6 @@ A web application that solves Sudoku puzzles with a **spiking neural network
 shows the network's activity live in the browser.
 
 **Live demo:** <https://sudoku-solver-using-spiking-neural-network.vercel.app/>
-(also on Netlify: <https://sudoku-solver-using-snn.netlify.app/>)
 
 ![The application after solving a puzzle: the solved board, the live statistics and the performance plot, followed by the network analysis down to the firing-rate histogram](docs/screenshot.png)
 
@@ -637,7 +636,7 @@ searched, but they can take many minutes.
 | Testing | pytest, Vitest, Testing Library |
 | CI | GitHub Actions |
 | Hosting | Vercel Services (static site and Python function) |
-| Alternative hosting | Netlify (frontend, using the Vercel backend); Docker image for the backend |
+| Alternative hosting | Docker image for the backend |
 
 ---
 
@@ -673,7 +672,6 @@ searched, but they can take many minutes.
 │   └── screenshot.png
 ├── .github/workflows/ci.yml     Runs both test suites on every push
 ├── vercel.json                  Vercel services and routing
-├── netlify.toml                 Netlify build of the frontend
 └── LICENSE                      GPL-2.0
 ```
 
@@ -719,7 +717,7 @@ All settings are optional environment variables of the backend.
 | `WALL_BUDGET_S` | `240` | Wall-clock seconds one request may simulate before the browser continues with a new request (10–280) |
 | `NOISE_RATE` | `350` | Background Poisson rate in Hz |
 | `MAX_CONCURRENT_RUNS` | `3` | Simulations that may run at once on one server instance (1–16); each uses about 300 MB |
-| `CORS_ORIGINS` | the Netlify site | Comma-separated origins allowed to call the backend from another site |
+| `CORS_ORIGINS` | – | Comma-separated origins allowed to call a separately hosted backend |
 
 Frontend build variable:
 
@@ -744,22 +742,6 @@ Requests to `/api/*` go to the backend; all other paths go to the frontend.
 To deploy, import the GitHub repository in Vercel, set the **Framework
 Preset** to **Services**, and keep the root directory at the repository root.
 Every push to `main` redeploys.
-
-### Netlify (second frontend)
-
-`netlify.toml` builds the same frontend on Netlify. Netlify serves only the
-static site: the backend needs Python, NEST and requests of up to 300 s, so
-the Netlify site calls the Vercel backend directly, set through
-`VITE_API_BASE`.
-
-1. In Netlify, choose **Add new site → Import an existing project** and select
-   the GitHub repository. Netlify reads all build settings from
-   `netlify.toml`; leave the fields in the form as they are.
-2. The backend allows requests from `https://sudoku-solver-using-snn.netlify.app`
-   by default. For a site under another address, set `CORS_ORIGINS` in the
-   Vercel project to that address (no trailing slash) and redeploy.
-
-Every push to `main` redeploys both sites.
 
 ### Docker (alternative backend host)
 

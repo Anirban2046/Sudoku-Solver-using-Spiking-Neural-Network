@@ -24,10 +24,7 @@ async def lifespan(_app):
 
 app = FastAPI(title="Sudoku Solver using Spiking Neural Network", lifespan=lifespan)
 
-# The Netlify copy of the frontend (netlify.toml) calls this backend directly.
-_cors_env = os.environ.get("CORS_ORIGINS", "").strip() or "https://sudoku-solver-using-snn.netlify.app"
-# browsers send origins without a trailing slash
-_cors = [o.strip().rstrip("/") for o in _cors_env.split(",") if o.strip()]
+_cors = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
 if _cors:
     app.add_middleware(CORSMiddleware, allow_origins=_cors, allow_methods=["GET", "POST"], allow_headers=["*"])
 

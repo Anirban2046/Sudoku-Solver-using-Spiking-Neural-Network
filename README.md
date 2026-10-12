@@ -5,6 +5,7 @@ A web application that solves Sudoku puzzles with a **spiking neural network
 shows the network's activity live in the browser.
 
 **Live demo:** <https://sudoku-solver-using-spiking-neural-network.vercel.app/>
+(also on Netlify: <https://sudoku-solver-using-snn.netlify.app/>)
 
 ![The application after solving a puzzle: the solved board, the live statistics and the performance plot, followed by the network analysis down to the firing-rate histogram](docs/screenshot.png)
 
@@ -718,7 +719,7 @@ All settings are optional environment variables of the backend.
 | `WALL_BUDGET_S` | `240` | Wall-clock seconds one request may simulate before the browser continues with a new request (10–280) |
 | `NOISE_RATE` | `350` | Background Poisson rate in Hz |
 | `MAX_CONCURRENT_RUNS` | `3` | Simulations that may run at once on one server instance (1–16); each uses about 300 MB |
-| `CORS_ORIGINS` | – | Comma-separated origins allowed to call a separately hosted backend |
+| `CORS_ORIGINS` | the Netlify site | Comma-separated origins allowed to call the backend from another site |
 
 Frontend build variable:
 
@@ -754,10 +755,9 @@ the Netlify site calls the Vercel backend directly, set through
 1. In Netlify, choose **Add new site → Import an existing project** and select
    the GitHub repository. Netlify reads all build settings from
    `netlify.toml`; leave the fields in the form as they are.
-2. In the Vercel project, under **Settings → Environment Variables**, set
-   `CORS_ORIGINS` to the Netlify site's address, for example
-   `https://<site-name>.netlify.app` (no trailing slash), then redeploy so the
-   backend accepts requests from that site.
+2. The backend allows requests from `https://sudoku-solver-using-snn.netlify.app`
+   by default. For a site under another address, set `CORS_ORIGINS` in the
+   Vercel project to that address (no trailing slash) and redeploy.
 
 Every push to `main` redeploys both sites.
 

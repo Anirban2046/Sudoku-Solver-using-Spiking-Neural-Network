@@ -49,9 +49,9 @@ export default function CellRaster({ rows, perPop, windowMs, winner, rival, labe
       const top = d * (perPop * ROW_H + 4);
       const isWin = d + 1 === winner;
       const isRival = d + 1 === rival;
-      const color = isWin ? COLORS.sky : isRival ? COLORS.violet : "#7b8aa8";
+      const color = isWin ? COLORS.sky : isRival ? COLORS.violet : COLORS.grey;
       if (isWin) {
-        ctx.fillStyle = "rgba(56, 189, 248, 0.08)";
+        ctx.fillStyle = "rgba(56, 139, 253, 0.1)";
         ctx.fillRect(LEFT, top - 1, plotW, perPop * ROW_H + 2);
       }
       let n = 0;
@@ -63,7 +63,7 @@ export default function CellRaster({ rows, perPop, windowMs, winner, rival, labe
           n++;
         }
       }
-      ctx.fillStyle = isWin || isRival ? color : "#9aa8c3";
+      ctx.fillStyle = isWin || isRival ? color : "#9198a1";
       ctx.textAlign = "right";
       ctx.fillText(String(d + 1), LEFT - 10, top + (perPop * ROW_H) / 2);
       ctx.textAlign = "left";
@@ -72,7 +72,7 @@ export default function CellRaster({ rows, perPop, windowMs, winner, rival, labe
 
     // time axis
     const axisY = height - BOTTOM + 4;
-    ctx.fillStyle = "#9aa8c3";
+    ctx.fillStyle = "#9198a1";
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
     const step = windowMs <= 100 ? 20 : windowMs <= 300 ? 50 : 100;

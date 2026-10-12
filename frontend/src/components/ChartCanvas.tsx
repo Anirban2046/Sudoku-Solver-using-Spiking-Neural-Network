@@ -30,13 +30,13 @@ Chart.register(
   Tooltip,
 );
 
-// Dark theme defaults for every chart.
-Chart.defaults.color = "#9aa8c3";
-Chart.defaults.borderColor = "rgba(148, 163, 184, 0.14)";
-Chart.defaults.font.family = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+// GitHub dark theme defaults for every chart.
+Chart.defaults.color = "#9198a1";
+Chart.defaults.borderColor = "#21262d";
+Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif';
 Chart.defaults.plugins.legend.labels.boxHeight = 2;
-Chart.defaults.plugins.tooltip.backgroundColor = "#1b2540";
-Chart.defaults.plugins.tooltip.borderColor = "#2c3a5c";
+Chart.defaults.plugins.tooltip.backgroundColor = "#161b22";
+Chart.defaults.plugins.tooltip.borderColor = "#30363d";
 Chart.defaults.plugins.tooltip.borderWidth = 1;
 
 export interface Marker {
@@ -120,13 +120,13 @@ export default function ChartCanvas({ config, height = 220, label }: Props) {
 }
 
 export const COLORS = {
-  text: "#e6ebf5",
-  sky: "#38bdf8",
-  violet: "#a78bfa",
-  green: "#34d399",
-  amber: "#fbbf24",
-  red: "#f87171",
-  grey: "#64748b",
+  text: "#e6edf3",
+  sky: "#58a6ff",
+  violet: "#bc8cff",
+  green: "#3fb950",
+  amber: "#d29922",
+  red: "#f85149",
+  grey: "#6e7681",
 };
 
 /** A round axis maximum at or just above `v` (at least `min`), so the data

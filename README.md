@@ -73,7 +73,7 @@ evolved.
 
 | Feature | Description |
 |---|---|
-| Live board | Updated every 100 ms of simulated time. Given digits are white, the network's digits light-blue italic, overridden givens red. Invalid rows and columns get red markers, invalid boxes a red frame. Changed cells flash |
+| Live board | Updated every 100 ms of simulated time. Given digits are white, the network's digits light-blue italic, overridden givens red. Invalid rows and columns get red markers, invalid boxes a red frame. Cells that changed in the latest window are highlighted |
 | Live statistics | Simulated time, noise rate, status, performance, spikes per window, network firing rate, firing rate of the winning neurons |
 | Performance plot | Fraction of valid rows, columns and boxes over simulated time; both axes rescale as the run grows |
 | Replay | After a run, a slider replays any 100 ms window on the board |
@@ -99,7 +99,7 @@ evolved.
 
 ### Presentation
 
-* Dark theme throughout, including charts and print output
+* GitHub-style dark theme throughout, including charts and print output
 * Responsive layout down to phone width
 * Keyboard navigation, labelled controls and visible focus; no automated
   accessibility violations (axe-core)
@@ -666,7 +666,7 @@ searched, but they can take many minutes.
 │       ├── components/      Grid, controls, live panel, charts, raster, analysis
 │       ├── lib/             Sudoku logic, API client, event types, decoding
 │       ├── __tests__/       Vitest suite
-│       └── styles.css       Dark theme
+│       └── styles.css       GitHub-style dark theme
 ├── docs/
 │   ├── reference/sudoku_net.py  Unmodified upstream network, for comparison
 │   └── screenshot.png

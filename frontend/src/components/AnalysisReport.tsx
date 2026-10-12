@@ -167,7 +167,7 @@ function CellInspector({ meta, done }: { meta: MetaEvent; done: DoneEvent }) {
               onClick={() => setCell(i)}
               aria-label={`${cellName(i)}, digit ${d}`}
               aria-pressed={i === cell}
-              style={i === cell ? undefined : { background: `rgba(251, 191, 36, ${(0.4 * (1 - done.cells.margin[i])).toFixed(3)})` }}
+              style={i === cell ? undefined : { background: `rgba(210, 153, 34, ${(0.4 * (1 - done.cells.margin[i])).toFixed(3)})` }}
             >
               {d}
             </button>

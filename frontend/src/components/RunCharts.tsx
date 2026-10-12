@@ -33,7 +33,7 @@ export function PerformanceChart({ steps, cursorMs }: Props) {
             label: "performance",
             data: steps.map((s) => ({ x: s.t_start_ms, y: s.performance })),
             borderColor: COLORS.sky,
-            backgroundColor: "rgba(56, 189, 248, 0.12)",
+            backgroundColor: "rgba(56, 139, 253, 0.1)",
             fill: "origin",
             borderWidth: 2,
             pointRadius: 0,

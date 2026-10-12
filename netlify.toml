@@ -1,0 +1,10 @@
+# Netlify serves the static frontend; the simulation backend stays on Vercel
+# (it needs Python, NEST and up to 300 s per request).
+[build]
+  base = "frontend"
+  command = "npm run build:web"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  VITE_API_BASE = "https://sudoku-solver-using-spiking-neural-network.vercel.app"

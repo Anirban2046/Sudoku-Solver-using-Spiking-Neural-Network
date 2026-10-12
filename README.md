@@ -636,7 +636,7 @@ searched, but they can take many minutes.
 | Testing | pytest, Vitest, Testing Library |
 | CI | GitHub Actions |
 | Hosting | Vercel Services (static site and Python function) |
-| Alternative hosting | Docker image for the backend |
+| Alternative hosting | Netlify (frontend, using the Vercel backend); Docker image for the backend |
 
 ---
 
@@ -672,6 +672,7 @@ searched, but they can take many minutes.
 │   └── screenshot.png
 ├── .github/workflows/ci.yml     Runs both test suites on every push
 ├── vercel.json                  Vercel services and routing
+├── netlify.toml                 Netlify build of the frontend
 └── LICENSE                      GPL-2.0
 ```
 
@@ -742,6 +743,23 @@ Requests to `/api/*` go to the backend; all other paths go to the frontend.
 To deploy, import the GitHub repository in Vercel, set the **Framework
 Preset** to **Services**, and keep the root directory at the repository root.
 Every push to `main` redeploys.
+
+### Netlify (second frontend)
+
+`netlify.toml` builds the same frontend on Netlify. Netlify serves only the
+static site: the backend needs Python, NEST and requests of up to 300 s, so
+the Netlify site calls the Vercel backend directly, set through
+`VITE_API_BASE`.
+
+1. In Netlify, choose **Add new site → Import an existing project** and select
+   the GitHub repository. Netlify reads all build settings from
+   `netlify.toml`; leave the fields in the form as they are.
+2. In the Vercel project, under **Settings → Environment Variables**, set
+   `CORS_ORIGINS` to the Netlify site's address, for example
+   `https://<site-name>.netlify.app` (no trailing slash), then redeploy so the
+   backend accepts requests from that site.
+
+Every push to `main` redeploys both sites.
 
 ### Docker (alternative backend host)
 

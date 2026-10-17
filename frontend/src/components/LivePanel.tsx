@@ -19,7 +19,7 @@ export default function LivePanel({ meta, steps, status, busy, viewIndex, onView
   const latest = steps[steps.length - 1] ?? null;
   const replaying = status === "done" && step !== latest;
 
-  let statusText = "starting… (loading NEST and building the network)";
+  let statusText = "building the network in NEST Simulator…";
   if (status === "running" && meta) statusText = "solving…";
   if (busy && status !== "done" && status !== "error") statusText = "waiting for a free simulator…";
   if (status === "done") statusText = `solved at ${fmt(latest?.t_start_ms ?? 0)} ms`;
@@ -31,8 +31,8 @@ export default function LivePanel({ meta, steps, status, busy, viewIndex, onView
         <div className="stats">
           <div className="stat-label">Time progressed</div>
           <div className="stat-value">{fmt(step ? step.t_end_ms : 0)} ms</div>
-          <div className="stat-label">Noise rate</div>
-          <div className="stat-value">{meta ? `${fmt(meta.noise_rate)} Hz` : "–"}</div>
+          <div className="stat-label">Rule conflicts</div>
+          <div className="stat-value">{step ? fmt(step.violations) : "–"}</div>
           <div className="stat-label">Status</div>
           <div className={`stat-value status-${status}`} aria-live="polite">
             {statusText}

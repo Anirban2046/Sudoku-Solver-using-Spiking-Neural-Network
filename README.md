@@ -74,7 +74,7 @@ evolved.
 | Feature | Description |
 |---|---|
 | Live board | Updated every 100 ms of simulated time. Given digits are white, the network's digits light-blue italic, overridden givens red. Invalid rows and columns get red markers, invalid boxes a red frame. Cells that changed in the latest window are highlighted |
-| Live statistics | Simulated time, noise rate, status, performance, spikes per window, network firing rate, firing rate of the winning neurons |
+| Live statistics | Simulated time, rule conflicts (cell pairs in a row, column or box showing the same digit), status, performance, spikes per window, network firing rate, firing rate of the winning neurons |
 | Performance plot | Fraction of valid rows, columns and boxes over simulated time; both axes rescale as the run grows |
 | Replay | After a run, a slider replays any 100 ms window on the board |
 
@@ -536,8 +536,8 @@ The page is a single screen, top to bottom:
 
 1. **Title and grid.** The 9×9 board with the three buttons below it:
    **Randomly Initialize**, **Clear Grid**, **Start Solving**.
-2. **Live panel** (during and after a run). Time progressed, noise rate,
-   status and current statistics on the left; the performance plot on the
+2. **Live panel** (during and after a run). Time progressed, rule
+   conflicts, status and current statistics on the left; the performance plot on the
    right; a replay slider once the run has finished.
 3. **Inside the spiking network** (after a run):
    * summary tiles: solved-at time, neurons, connections, spikes fired,
